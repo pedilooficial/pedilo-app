@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function operatorRole() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function operatorActive() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+
+    function isAdmin() {
+      return operatorRole() == "admin" && operatorActive();
+    }
+
+    function isOperator() {
+      return operatorRole() in ["store", "driver", "admin"] && operatorActive();
+    }
+
+    function canReadOrder(order) {
+      return signedIn()
+        && isOperator()
+        && (isAdmin()
+          || (operatorRole() == "store"
+            && order.storeId == request.auth.uid)
+          || (operatorRole() == "driver"
+            && (order.driverId == request.auth.uid
+              || order.assignedActorId == request.auth.uid))
+          || (operatorRole() == "driver"
+            && order.responsibleRole == "driver"
+            && order.currentResponsibleRole == "driver"
+            && order.assignedActorId == ""
+            && order.driverId == ""
+            && order.nextAllowedActions.hasAny(["driver_take"])));
+    }
+
+    function storeVisible(storeId) {
+      return exists(/databases/$(database)/documents/stores/$(storeId))
+        && get(/databases/$(database)/documents/stores/$(storeId)).data.visible == true;
+    }
+
+    function productPubliclyVisible(product) {
+      return product.visible == true
+        && (!("available" in product) || product.available == true);
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if isAdmin();
+
+      match /access_events/{eventId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
+    match /admin_config/{configId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
+    match /stores/{storeId} {
+      allow read: if resource.data.visible == true;
+      allow create, update, delete: if false;
+
+      match /products/{productId} {
+        allow read: if (storeVisible(storeId)
+            && productPubliclyVisible(resource.data))
+          || (signedIn()
+            && operatorRole() == "store"
+            && operatorActive()
+            && request.auth.uid == storeId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /orders/{orderId} {
+      allow read: if canReadOrder(resource.data);
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow read: if exists(/databases/$(database)/documents/orders/$(orderId))
+          && canReadOrder(get(/databases/$(database)/documents/orders/$(orderId)).data);
+        allow write: if false;
+      }
+
+      match /incidents/{incidentId} {
+        allow read: if exists(/databases/$(database)/documents/orders/$(orderId))
+          && canReadOrder(get(/databases/$(database)/documents/orders/$(orderId)).data);
+        allow write: if false;
+      }
+
+      match /claims/{claimId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+
+      match /communications/{communicationId} {
+        allow read: if exists(/databases/$(database)/documents/orders/$(orderId))
+          && canReadOrder(get(/databases/$(database)/documents/orders/$(orderId)).data);
+        allow write: if false;
+      }
+
+      match /ai_decisions/{aiDecisionId} {
+        allow read: if exists(/databases/$(database)/documents/orders/$(orderId))
+          && canReadOrder(get(/databases/$(database)/documents/orders/$(orderId)).data);
+        allow write: if false;
+      }
+
+      match /driver_requests/{requestId} {
+        allow read: if exists(/databases/$(database)/documents/orders/$(orderId))
+          && canReadOrder(get(/databases/$(database)/documents/orders/$(orderId)).data);
+        allow write: if false;
+      }
+    }
+
+    match /cashbox_closures/{cashboxId} {
+      allow read: if isAdmin()
+        || (signedIn()
+          && operatorRole() == "driver"
+          && operatorActive()
+          && resource.data.driverId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /public_claims/{claimId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+
+      match /communications/{communicationId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+  }
+}

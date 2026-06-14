@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Pedilo" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#020B10</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#020B10</item>
+        <item name="android:statusBarColor">#020B10</item>
+        <item name="android:windowSplashScreenBackground">#020B10</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>
