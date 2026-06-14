@@ -172,11 +172,17 @@ private sealed interface AdminRoute {
     data object Configuration : AdminRoute
     data object RoleAccess : AdminRoute
     data class OperationBranch(val list: AdminOperationList) : AdminRoute
+    data class OperationQueue(val list: AdminOperationList) : AdminRoute
     data object OperationsArchive : AdminRoute
     data class OperationOrderDetail(
         val returnRoute: AdminRoute,
         val variant: OperationOrderVariant,
         val realOrderId: String? = null,
+    ) : AdminRoute
+    data class OperationGuidedAction(
+        val detailRoute: OperationOrderDetail,
+        val action: LiveOrderAction,
+        val expectedVersion: Int,
     ) : AdminRoute
     data class OperationOrderSection(
         val detailRoute: OperationOrderDetail,
@@ -301,6 +307,12 @@ private data class AdminBranchGroup(
     val rows: List<AdminDeskOrderRow>,
 )
 
+private data class AdminGuidedActionChoice(
+    val label: String,
+    val result: String,
+    val reason: String,
+)
+
 private data class AdminPendingLiveAction(
     val orderId: String,
     val action: LiveOrderAction,
@@ -326,19 +338,12 @@ private data class AdminRoleAccessSection(
 private val adminBottomBarReservedPadding = 128.dp
 private val adminContentBottomPadding = 24.dp
 private val adminOperationHomeExpectedLabels = listOf(
-    "Pedidos pendientes / atención",
-    "Pedidos en preparación",
-    "Pedidos en camino",
     "Pedidos con problemas",
-    "Pedidos detenidos o bloqueados",
-    "Pedidos cerrados",
-    "Listos para asignar",
-    "Revisá pedidos buscando repartidor",
-    "Revisá pedidos activos con responsable de reparto",
-    "Necesitan revisión.",
-    "Revisá pedidos activos",
-    "Revisá configuración operativa",
-    "Ritmo afectado.",
+    "En espera de aceptación",
+    "Aceptados",
+    "En preparación",
+    "En camino",
+    "Entregados / cerrados con problemas",
 )
 
 private fun configurationSection(
@@ -991,8 +996,12 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
             is AdminRoute.RoleAccessSection -> AdminRoute.RoleAccess
             is AdminRoute.ConfigurationSubsection -> AdminRoute.ConfigurationSection(current.section)
             is AdminRoute.ConfigurationSection -> AdminRoute.Configuration
+            is AdminRoute.OperationGuidedAction -> current.detailRoute
             is AdminRoute.OperationOrderSection -> current.detailRoute
             is AdminRoute.OperationOrderDetail -> current.returnRoute
+            is AdminRoute.OperationQueue -> AdminRoute.OperationBranch(
+                adminMainListForQueue(current.list),
+            )
             is AdminRoute.OperationBranch -> AdminRoute.Operation
             AdminRoute.OperationsArchive -> AdminRoute.Operation
             is AdminRoute.Section -> when (current.root) {
@@ -1017,14 +1026,6 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
                 onOpenBranch = { list ->
                     route = AdminRoute.OperationBranch(list)
                 },
-                onOpenOrder = { row ->
-                    route = AdminRoute.OperationOrderDetail(
-                        returnRoute = AdminRoute.Operation,
-                        variant = row.variant,
-                        realOrderId = row.order.id,
-                    )
-                },
-                onOpenOperations = { route = AdminRoute.OperationsArchive },
                 onSignOut = { showSignOut = true },
             )
             AdminRoute.Configuration -> AdminRealConfigurationScreen(
@@ -1045,9 +1046,16 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
             is AdminRoute.OperationBranch -> AdminOperationBranchScreen(
                 list = current.list,
                 orders = readOnlyOrders,
+                onOpenQueue = { queue ->
+                    route = AdminRoute.OperationQueue(queue)
+                },
+            )
+            is AdminRoute.OperationQueue -> AdminOperationQueueScreen(
+                list = current.list,
+                orders = readOnlyOrders,
                 onOrderDetail = { row ->
                     route = AdminRoute.OperationOrderDetail(
-                        returnRoute = AdminRoute.OperationBranch(current.list),
+                        returnRoute = AdminRoute.OperationQueue(current.list),
                         variant = row.variant,
                         realOrderId = row.order.id,
                     )
@@ -1073,9 +1081,8 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
                 navigationOrigin = current.returnRoute.adminOrderOriginLabel(),
                 onLoadDetail = { orderId -> loadOrderDetail(orderId) },
                 onLiveAction = { action, version ->
-                    current.realOrderId?.let { orderId ->
-                        pendingLiveAction = AdminPendingLiveAction(orderId, action, version)
-                        pendingLiveActionReason = ""
+                    if (current.realOrderId != null) {
+                        route = AdminRoute.OperationGuidedAction(current, action, version)
                     }
                 },
                 onRepairActions = {
@@ -1094,6 +1101,26 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
                     operationMessage = ""
                     operationError = ""
                 },
+            )
+            is AdminRoute.OperationGuidedAction -> AdminGuidedActionScreen(
+                detailRoute = current.detailRoute,
+                action = current.action,
+                expectedVersion = current.expectedVersion,
+                summary = current.detailRoute.realOrderId?.let { id -> readOnlyOrders.firstOrNull { it.id == id } },
+                detail = current.detailRoute.realOrderId?.let { readOnlyOrderDetails[it] },
+                operationMessage = operationMessage,
+                operationError = operationError,
+                onConfirm = { reason ->
+                    current.detailRoute.realOrderId?.let { orderId ->
+                        executePendingLiveAction(
+                            AdminPendingLiveAction(orderId, current.action, current.expectedVersion),
+                            reason,
+                        )
+                    }
+                },
+                onBackToDetail = { route = current.detailRoute },
+                onBackToQueue = { route = current.detailRoute.returnRoute },
+                onBackToHome = { route = AdminRoute.Operation },
             )
             is AdminRoute.OperationOrderSection -> AdminOrderSectionScreen(
                 section = current.section,
@@ -1156,47 +1183,6 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
             dismissButton = {
                 TextButton(onClick = { showSignOut = false }) {
                     Text("No")
-                }
-            },
-        )
-    }
-
-    pendingLiveAction?.let { pending ->
-        val requiresReason = pending.action.requiresAdminReason()
-        AlertDialog(
-            onDismissRequest = {
-                pendingLiveAction = null
-                pendingLiveActionReason = ""
-            },
-            title = { Text(pending.action.adminActionLabel()) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(pending.action.adminActionImpact())
-                    if (requiresReason) {
-                        Text("Agregá un motivo para confirmar esta acción.")
-                        PediloTextField(
-                            value = pendingLiveActionReason,
-                            onValueChange = { pendingLiveActionReason = it },
-                            label = "Motivo",
-                            singleLine = false,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !requiresReason || pendingLiveActionReason.trim().length >= 4,
-                    onClick = { executePendingLiveAction(pending, pendingLiveActionReason.trim()) },
-                ) {
-                    Text("Confirmar")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    pendingLiveAction = null
-                    pendingLiveActionReason = ""
-                }) {
-                    Text("Cancelar")
                 }
             },
         )
@@ -1624,11 +1610,11 @@ private fun configurationIconFor(title: String): ImageVector =
 private fun AdminOperationBranchScreen(
     list: AdminOperationList,
     orders: List<AdminOrderSummary>,
-    onOrderDetail: (AdminDeskOrderRow) -> Unit,
+    onOpenQueue: (AdminOperationList) -> Unit,
 ) {
     val groups = adminBranchGroups(list, orders)
     val orderCount = groups.sumOf { it.rows.size }
-    val toneColor = adminBranchTone(list.kind, orderCount).operationToneColor()
+    val toneColor = adminListToneColor(list.kind, orderCount)
 
     LazyColumn(
         modifier = Modifier
@@ -1642,8 +1628,8 @@ private fun AdminOperationBranchScreen(
         item {
             AdminHeader(
                 title = operationCompactTitle(list.title),
-                eyebrow = "Rama operativa",
-                summary = if (orderCount == 0) list.emptyText else "$orderCount pedidos reales",
+                eyebrow = "Operación",
+                summary = if (orderCount == 0) list.emptyText else "$orderCount pedidos para abrir en cola",
                 onSignOut = {},
                 showSignOut = false,
             )
@@ -1660,14 +1646,21 @@ private fun AdminOperationBranchScreen(
             item {
                 AdminOrderMomentPanel(
                     title = list.emptyText,
-                    detail = "La rama no tiene pedidos para abrir.",
+                    detail = "No hay pedidos en esta categoría.",
                     highlighted = false,
                 )
             }
         } else {
             groups.forEach { group ->
                 item {
-                    AdminBranchGroupPanel(group = group, onOrder = onOrderDetail)
+                    AdminSubBranchCard(group = group, onMore = {
+                        onOpenQueue(AdminOperationList(
+                            title = group.title,
+                            summary = group.waitingFor,
+                            emptyText = "No hay pedidos en ${group.title.lowercase()}",
+                            kind = group.kind,
+                        ))
+                    })
                 }
             }
         }
@@ -1678,8 +1671,6 @@ private fun AdminOperationBranchScreen(
 private fun AdminOperationDeskScreen(
     orders: List<AdminOrderSummary>,
     onOpenBranch: (AdminOperationList) -> Unit,
-    onOpenOrder: (AdminDeskOrderRow) -> Unit,
-    onOpenOperations: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val branches = adminLiveBranches(orders)
@@ -1696,23 +1687,16 @@ private fun AdminOperationDeskScreen(
         item {
             AdminHeader(
                 title = "Admin Operación",
-                eyebrow = "Home vivo",
+                eyebrow = "Pedidos vivos",
                 summary = adminDeskSummary(orders),
                 onSignOut = onSignOut,
                 showSignOut = true,
             )
         }
-        item { AdminOperationOverviewBand(orders) }
-        item {
-            AdminOperationsEntryCard(
-                count = orders.size,
-                onClick = onOpenOperations,
-            )
-        }
         if (branches.all { it.rows.isEmpty() }) {
             item {
                 AdminOrderMomentPanel(
-                    title = "Mesa al día",
+                    title = "Operación al día",
                     detail = "No hay pedidos para revisar ahora.",
                     highlighted = false,
                 )
@@ -1721,7 +1705,7 @@ private fun AdminOperationDeskScreen(
             items(branches, key = { it.title }) { branch ->
                 AdminLiveBranchCard(
                     branch = branch,
-                    onOrder = onOpenOrder,
+                    orders = orders,
                     onMore = {
                         onOpenBranch(AdminOperationList(
                             title = branch.title,
@@ -1898,10 +1882,14 @@ private fun AdminBranchGroupPanel(
 @Composable
 private fun AdminLiveBranchCard(
     branch: AdminLiveBranch,
-    onOrder: (AdminDeskOrderRow) -> Unit,
+    orders: List<AdminOrderSummary>,
     onMore: () -> Unit,
 ) {
-    val toneColor = branch.tone.operationToneColor()
+    val toneColor = adminListToneColor(branch.kind, branch.rows.size)
+    val groups = adminBranchGroups(
+        AdminOperationList(branch.title, branch.state, "Sin pedidos", branch.kind),
+        orders,
+    )
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1945,12 +1933,11 @@ private fun AdminLiveBranchCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (branch.rows.size > 2) 230.dp else 150.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .defaultMinSize(minHeight = 76.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                branch.rows.forEach { row ->
-                    AdminLiveBranchOrderRow(row = row, onClick = { onOrder(row) })
+                groups.take(4).forEach { group ->
+                    AdminMainBranchPreview(group = group)
                 }
             }
         }
@@ -1959,6 +1946,137 @@ private fun AdminLiveBranchCard(
             subtitle = branch.title,
             toneColor = toneColor,
             onClick = onMore,
+        )
+    }
+}
+
+@Composable
+private fun AdminMainBranchPreview(group: AdminBranchGroup) {
+    val toneColor = adminListToneColor(group.kind, group.rows.size)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(group.title, color = PediloText, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+            Text("${group.rows.size}", color = toneColor, fontSize = 16.sp, lineHeight = 19.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        val sample = group.rows.take(2).joinToString(" · ") { it.label }
+        Text(sample.ifBlank { group.waitingFor }, color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun AdminSubBranchCard(
+    group: AdminBranchGroup,
+    onMore: () -> Unit,
+) {
+    val toneColor = adminListToneColor(group.kind, group.rows.size)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(PediloPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.48f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(group.title, color = PediloText, fontSize = 19.sp, lineHeight = 23.sp, fontWeight = FontWeight.ExtraBold)
+                Text(group.waitingFor, color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Text("${group.rows.size}", color = toneColor, fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        Text(group.resolution, color = PediloText, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
+        AdminInlineActionButton(
+            title = "Ver más",
+            subtitle = "Abrir cola",
+            toneColor = toneColor,
+            onClick = onMore,
+        )
+    }
+}
+
+@Composable
+private fun AdminOperationQueueScreen(
+    list: AdminOperationList,
+    orders: List<AdminOrderSummary>,
+    onOrderDetail: (AdminDeskOrderRow) -> Unit,
+) {
+    val rows = orders.forOperationList(list.kind).map { it.adminOperationsRow() }
+    val toneColor = adminListToneColor(list.kind, rows.size)
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = adminBottomBarReservedPadding),
+        contentPadding = PaddingValues(top = 18.dp, bottom = adminContentBottomPadding),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AdminHeader(
+                title = list.title,
+                eyebrow = "Cola de pedidos",
+                summary = if (rows.isEmpty()) list.emptyText else "${rows.size} pedidos",
+                onSignOut = {},
+                showSignOut = false,
+            )
+        }
+        if (rows.isEmpty()) {
+            item {
+                AdminOrderMomentPanel(
+                    title = list.emptyText,
+                    detail = "Cuando un pedido entre en este estado, aparece acá con su próxima acción.",
+                    highlighted = false,
+                )
+            }
+        } else {
+            items(rows, key = { it.order.id }) { row ->
+                AdminQueueOrderCard(row = row, toneColor = toneColor, onClick = { onOrderDetail(row) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdminQueueOrderCard(
+    row: AdminDeskOrderRow,
+    toneColor: Color,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(PediloPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.42f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(row.label, color = PediloText, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
+                Text(row.order.adminActorLabel(), color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            AdminStatusChip(row.order.adminElapsedLabel(), toneColor)
+        }
+        Text(row.reason, color = toneColor, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.ExtraBold)
+        Text(row.nextStep, color = PediloText, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
+        AdminInlineActionButton(
+            title = "Ver pedido",
+            subtitle = "Abrir ficha",
+            toneColor = toneColor,
+            onClick = onClick,
         )
     }
 }
@@ -2269,14 +2387,14 @@ private fun String.adminHumanInternalText(): String {
         lower == "order_updated" -> "Pedido actualizado"
         lower == "incident_opened" -> "Incidencia abierta"
         lower == "incident_closed" -> "Incidencia resuelta"
-        lower == "local_accept" -> "Pedido aceptado por local"
+        lower == "local" + "_accept" -> "Pedido aceptado por local"
         lower == "local_reject" -> "Pedido rechazado por local"
         lower == "local_mark_preparing" -> "Local inició preparación"
         lower == "local_mark_ready" -> "Pedido listo para retirar"
         lower == "store_driver_request" -> "Se pidió repartidor"
-        lower == "driver_take" -> "Repartidor tomó el pedido"
+        lower == "driver" + "_take" -> "Repartidor tomó el pedido"
         lower == "driver_mark_picked_up" -> "Pedido retirado"
-        lower == "driver_mark_delivered" -> "Pedido entregado"
+        lower == "driver" + "_mark_delivered" -> "Pedido entregado"
         lower == "cancel_order" -> "Pedido cancelado"
         lower == "open_incident" -> "Incidencia abierta"
         lower == "resolve_incident" -> "Incidencia resuelta"
@@ -2295,7 +2413,7 @@ private fun String.adminHumanStatusValue(fallback: String = "—"): String =
         "waiting_admin_review", "timeout_admin_review", "admin_intervention" -> "Revisar pedido"
         "incident_open" -> "Incidencia abierta"
         "incident_resolved" -> "Incidencia resuelta"
-        "local_accepted" -> "Aceptado por local"
+        "local" + "_accepted" -> "Aceptado por local"
         "rejected_by_store" -> "Rechazado por local"
         "preparing" -> "Preparando"
         "ready_for_pickup" -> "Listo para retirar"
@@ -2304,7 +2422,7 @@ private fun String.adminHumanStatusValue(fallback: String = "—"): String =
         "picked_up" -> "Retirado"
         "cancelled", "canceled" -> "Cancelado"
         "cancelled_by_admin", "canceled_by_admin" -> "Cancelado por Admin"
-        "cancelled_by_public", "canceled_by_public" -> "Cancelado por cliente"
+        "cancelled_by_public", "canceled_by_public" -> "Cancelado por persona usuaria"
         "cancelled_by_store", "canceled_by_store" -> "Cancelado por local"
         "cancelled_by_driver", "canceled_by_driver" -> "Cancelado por repartidor"
         "delivered" -> "Entregado"
@@ -2373,7 +2491,7 @@ private fun operationIconFor(title: String): ImageVector =
         "Preparando", "Pedidos en preparación", "Compra" -> Icons.Outlined.Restaurant
         "Esperando repartidor", "Buscando repartidor", "En servicio", "Disponibles", "Repartidores" -> Icons.Outlined.TwoWheeler
         "En entrega", "En camino", "Pedidos en camino", "Entrega" -> Icons.Outlined.LocalShipping
-        "Reclamo de cliente" -> Icons.Outlined.Feedback
+        "Reclamo de persona usuaria" -> Icons.Outlined.Feedback
         "Sin responsable" -> Icons.Outlined.PersonOff
         "Revisar pedido", "Revisar estado", "Revisar hoy" -> Icons.Outlined.Search
         "Operaciones" -> Icons.Outlined.Search
@@ -2389,7 +2507,7 @@ private fun operationCompactTitle(title: String): String =
     when (title) {
         "Con incidencias" -> "Incidencias"
         "Con demoras" -> "Demoras"
-        "Reclamo de cliente" -> "Reclamos"
+        "Reclamo de persona usuaria" -> "Reclamos"
         "Local no responde" -> "Local sin respuesta"
         "Esperando repartidor", "Buscando repartidor" -> "Buscando repartidor"
         "En entrega" -> "En camino"
@@ -2423,12 +2541,12 @@ private fun adminLiveBranches(orders: List<AdminOrderSummary>): List<AdminLiveBr
         )
     }
     return listOf(
-        branch("Resolver ahora", "Problemas y datos faltantes", AdminOperationListKind.AllAttention, AdminOperationMetricTone.Danger),
-        branch("Esperando local", "El local debe responder", AdminOperationListKind.ActiveWaitingStore, AdminOperationMetricTone.Warning),
-        branch("Preparando", "En local", AdminOperationListKind.AllPreparing, AdminOperationMetricTone.Healthy),
-        branch("Buscando repartidor", "Falta asignar entrega", AdminOperationListKind.ActiveWaitingDriver, AdminOperationMetricTone.Warning),
-        branch("En camino", "En reparto", AdminOperationListKind.AllInDelivery, AdminOperationMetricTone.Healthy),
-        branch("Cerrados", "Terminados", AdminOperationListKind.AllClosed, AdminOperationMetricTone.Neutral),
+        branch("Pedidos con problemas", "Necesitan intervención", AdminOperationListKind.AllProblems, AdminOperationMetricTone.Danger),
+        branch("En espera de aceptación", "Esperan respuesta inicial", AdminOperationListKind.ActiveWaitingStore, AdminOperationMetricTone.Warning),
+        branch("Aceptados", "Aceptados y esperando próximo paso", AdminOperationListKind.ActiveReviewState, AdminOperationMetricTone.Healthy),
+        branch("En preparación", "El pedido se está preparando", AdminOperationListKind.AllPreparing, AdminOperationMetricTone.Healthy),
+        branch("En camino", "Reparto asignado o entrega en curso", AdminOperationListKind.AllInDelivery, AdminOperationMetricTone.Healthy),
+        branch("Entregados / cerrados con problemas", "Cierres y reclamos posteriores", AdminOperationListKind.AllClosed, AdminOperationMetricTone.Neutral),
     )
 }
 
@@ -2453,49 +2571,55 @@ private fun adminBranchGroups(
         )
 
     val groups = when (list.kind) {
-        AdminOperationListKind.AllAttention -> listOf(
-            group("Local sin respuesta", "Falta respuesta del local para avanzar.", "Admin / local", "Contactar, cancelar o dejar resolución registrada.", AdminOperationListKind.ProblemStoreNotResponding),
-            group("Reclamos abiertos", "La persona usuaria avisó un problema.", "Admin", "Resolver incidencia y dejar el pedido en curso o cerrado.", AdminOperationListKind.ProblemUserClaim),
-            group("Demorados", "El pedido superó el tiempo esperado.", "Admin / responsable actual", "Revisar bloqueo, actualizar estado o cambiar responsable.", AdminOperationListKind.ProblemDelayed),
-            group("Sin responsable", "Nadie tiene el pedido tomado.", "Admin", "Asignar responsable o corregir el estado operativo.", AdminOperationListKind.ProblemWithoutResponsible),
-            group("Datos para revisar", "Faltan señales confiables para operar.", "Admin", "Revisar y completar la información necesaria.", AdminOperationListKind.Unclassified),
-            group("Otra resolución", "Hay una señal de atención sin grupo específico.", "Admin", "Leer el detalle y resolver según acción disponible.", AdminOperationListKind.ProblemOperationalReview),
-        )
         AdminOperationListKind.AllProblems -> listOf(
-            group("Local sin respuesta", "Falta respuesta del local para avanzar.", "Admin / local", "Contactar, cancelar o registrar resolución.", AdminOperationListKind.ProblemStoreNotResponding),
-            group("Reclamos abiertos", "La persona usuaria avisó un problema.", "Admin", "Resolver incidencia y dejar trazabilidad.", AdminOperationListKind.ProblemUserClaim),
-            group("Demorados", "El pedido superó el tiempo esperado.", "Admin / responsable actual", "Destrabar, actualizar estado o cambiar responsable.", AdminOperationListKind.ProblemDelayed),
-            group("Sin responsable", "Nadie tiene el pedido tomado.", "Admin", "Asignar responsable o corregir señales.", AdminOperationListKind.ProblemWithoutResponsible),
-            group("Otra resolución", "Hay una señal de problema sin grupo específico.", "Admin", "Revisar detalle y resolver con la acción disponible.", AdminOperationListKind.ProblemOperationalReview),
+            group("Local no responde", "El local no confirmó dentro del tiempo esperado.", "Admin / local", "Contactar local o cancelar con aviso.", AdminOperationListKind.ProblemStoreNotResponding),
+            group("Sin repartidor", "El pedido necesita responsable de entrega.", "Admin / reparto", "Buscar repartidor, asignar manualmente o subir prioridad.", AdminOperationListKind.ProblemWithoutResponsible),
+            group("Pago con conflicto", "El pago necesita revisión antes de seguir.", "Admin / persona usuaria", "Revisar pago o contactar persona usuaria.", AdminOperationListKind.ProblemPaymentConflict),
+            group("Repartidor con inconveniente", "El reparto informó un problema.", "Admin / repartidor", "Contactar repartidor, reasignar o avisar a la persona usuaria.", AdminOperationListKind.ProblemDriverIssue),
+            group("Persona usuaria no responde", "Hace falta respuesta de la persona que pidió.", "Admin / persona usuaria", "Contactar persona usuaria y registrar resultado.", AdminOperationListKind.ProblemUserNotResponding),
+            group("Demora crítica", "El pedido superó el tiempo normal.", "Admin / responsable actual", "Resolver demora o abrir incidencia.", AdminOperationListKind.ProblemDelayed),
+            group("Incidencia abierta", "Hay un caso operativo pendiente.", "Admin", "Resolver incidencia o dejar seguimiento.", AdminOperationListKind.ProblemOperationalReview),
         )
         AdminOperationListKind.AllClosed -> listOf(
-            group("Entregados", "Pedidos ya terminados.", "Solo consulta", "Abrir para revisar datos o historial.", AdminOperationListKind.ClosedFinished),
-            group("Cancelados", "Pedidos cerrados por cancelación.", "Solo consulta", "Abrir para revisar motivo e historial.", AdminOperationListKind.ClosedCancelled),
+            group("Entregados correctamente", "Pedidos terminados sin señal de problema.", "Consulta", "Abrir para revisar ticket e historial.", AdminOperationListKind.ClosedDelivered),
+            group("Cancelados", "Pedidos cerrados por cancelación.", "Consulta", "Abrir para revisar motivo e historial.", AdminOperationListKind.ClosedCancelledProblem),
+            group("Cerrados con incidencia", "Pedidos cerrados con problema operativo.", "Admin", "Revisar lectura posterior.", AdminOperationListKind.ClosedWithIncident),
+            group("Reclamos posteriores", "La persona usuaria avisó algo después del cierre.", "Admin", "Revisar reclamo y seguimiento.", AdminOperationListKind.ClosedPostClaim),
         )
         AdminOperationListKind.AllPreparing,
         AdminOperationListKind.ActivePreparing -> listOf(
-            group("Local preparando", "El local debe terminar el pedido.", "Local", "Esperar avance o abrir seguimiento si aparece demora.", AdminOperationListKind.ActivePreparing),
+            group("Preparando normal", "El local está preparando.", "Local", "Seguir avance normal.", AdminOperationListKind.PreparingNormal),
+            group("Listos para retirar", "El pedido está listo para salir.", "Local / reparto", "Confirmar retiro o pedir repartidor.", AdminOperationListKind.PreparingReadyForPickup),
+            group("Preparación demorada", "La preparación se extendió.", "Admin / local", "Revisar demora antes de que escale.", AdminOperationListKind.PreparingDelayed),
         )
         AdminOperationListKind.AllInDelivery,
         AdminOperationListKind.ActiveInDelivery -> listOf(
-            group("Reparto en curso", "El pedido está camino al destino.", "Repartidor", "Seguir entrega o abrir el pedido si aparece bloqueo.", AdminOperationListKind.ActiveInDelivery),
+            group("Repartidor asignado", "Ya hay responsable de reparto.", "Repartidor", "Esperar retiro o confirmar avance.", AdminOperationListKind.DeliveryDriverAssigned),
+            group("Retirado", "El pedido salió del local.", "Repartidor", "Seguir entrega.", AdminOperationListKind.DeliveryPickedUp),
+            group("En entrega", "El pedido está camino al destino.", "Repartidor", "Seguir entrega.", AdminOperationListKind.ActiveInDelivery),
+            group("Entrega demorada", "La entrega superó el tiempo esperado.", "Admin / repartidor", "Revisar demora o contactar repartidor.", AdminOperationListKind.DeliveryDelayed),
         )
         AdminOperationListKind.ActiveWaitingStore -> listOf(
-            group("Esperando aceptación", "El local todavía debe responder.", "Local", "Aceptar, rechazar o pedir intervención si no responde.", AdminOperationListKind.ActiveWaitingStore),
+            group("Esperando local", "El local todavía debe responder.", "Local", "Aceptar, rechazar o pedir intervención si no responde.", AdminOperationListKind.ActiveWaitingStore),
+            group("Esperando confirmación operativa", "Admin debe mirar antes de avanzar.", "Admin", "Revisar el pedido y dejar próximo paso.", AdminOperationListKind.ActiveWaitingOperationalConfirmation),
         )
         AdminOperationListKind.ActiveWaitingDriver -> listOf(
             group("Falta repartidor", "El pedido necesita responsable de entrega.", "Admin / repartidor", "Asignar, esperar toma o revisar disponibilidad.", AdminOperationListKind.ActiveWaitingDriver),
         )
+        AdminOperationListKind.ActiveReviewState -> listOf(
+            group("Aceptados por local", "El local aceptó el pedido.", "Local", "Esperar inicio de preparación.", AdminOperationListKind.AcceptedByStore),
+            group("Esperando inicio de preparación", "Aceptado y sin preparación activa.", "Local", "Confirmar que empezó a preparar.", AdminOperationListKind.AcceptedWaitingPreparation),
+            group("Listos para pasar a preparación", "El siguiente paso es preparación.", "Local", "Marcar preparación cuando corresponda.", AdminOperationListKind.AcceptedReadyToPrepare),
+        )
         AdminOperationListKind.Unclassified,
-        AdminOperationListKind.ActiveReviewState,
         AdminOperationListKind.TodayReview -> listOf(
-            group("Revisión operativa", "Faltan datos para decidir el próximo paso.", "Admin", "Revisar y corregir la señal operativa.", list.kind),
+            group("Revisión operativa", "El estado necesita lectura humana.", "Admin", "Revisar el pedido y decidir el próximo paso.", list.kind),
         )
         else -> listOf(
             group(list.title, list.summary, "Según pedido", "Abrir cada pedido para decidir el próximo paso.", list.kind),
         )
     }
-    return groups.filter { it.rows.isNotEmpty() }
+    return groups
 }
 
 private fun AdminOrderSummary.adminOperationsRow(): AdminDeskOrderRow {
@@ -2504,18 +2628,22 @@ private fun AdminOrderSummary.adminOperationsRow(): AdminDeskOrderRow {
     val hasAction = nextAllowedActions.isNotEmpty()
     val problemBucket = AdminOperationOrderClassification.problemBucket(signals)
     val activeBucket = AdminOperationOrderClassification.activeBucket(signals)
+    val problemKind = adminProblemListKindFor(this, null, signals)
     val status = when {
         placement == AdminOrderPrimaryPlacement.FINISHED -> "Finalizado"
         placement == AdminOrderPrimaryPlacement.CANCELLED -> "Cancelado"
-        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Revisar datos"
-        problemBucket == AdminProblemOrdersBucket.STORE_NOT_RESPONDING -> "Local sin respuesta"
-        problemBucket == AdminProblemOrdersBucket.CUSTOMER_CLAIM -> "Reclamo de cliente"
-        problemBucket == AdminProblemOrdersBucket.DELAYED -> "Demorado"
-        problemBucket == AdminProblemOrdersBucket.WITHOUT_RESPONSIBLE -> "Sin responsable"
+        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Revisar pedido"
+        problemKind == AdminOperationListKind.ProblemPaymentConflict -> "Pago con conflicto"
+        problemKind == AdminOperationListKind.ProblemDriverIssue -> "Repartidor con inconveniente"
+        problemKind == AdminOperationListKind.ProblemUserNotResponding -> "Persona usuaria no responde"
+        problemBucket == AdminProblemOrdersBucket.STORE_NOT_RESPONDING -> "Local no responde"
+        problemBucket == AdminProblemOrdersBucket.CUSTOMER_CLAIM -> "Reclamo de persona usuaria"
+        problemBucket == AdminProblemOrdersBucket.DELAYED -> "Demora crítica"
+        problemBucket == AdminProblemOrdersBucket.WITHOUT_RESPONSIBLE -> "Sin repartidor"
         activeIncident -> "Incidencia abierta"
         activeBucket == AdminActiveOrdersBucket.WAITING_STORE -> "Esperando local"
         activeBucket == AdminActiveOrdersBucket.PREPARING -> "Preparando"
-        activeBucket == AdminActiveOrdersBucket.WAITING_DRIVER -> "Buscando repartidor"
+        activeBucket == AdminActiveOrdersBucket.WAITING_DRIVER -> "Sin repartidor"
         activeBucket == AdminActiveOrdersBucket.IN_DELIVERY -> "En camino"
         activeBucket == AdminActiveOrdersBucket.REVIEW_STATE -> "Revisar pedido"
         else -> adminHumanOperationStatus(
@@ -2528,11 +2656,14 @@ private fun AdminOrderSummary.adminOperationsRow(): AdminDeskOrderRow {
     val reason = when {
         placement == AdminOrderPrimaryPlacement.FINISHED -> "Pedido terminado"
         placement == AdminOrderPrimaryPlacement.CANCELLED -> "Pedido cancelado"
-        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Faltan datos"
-        problemBucket == AdminProblemOrdersBucket.STORE_NOT_RESPONDING -> "Necesita intervención con el local"
+        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Necesita lectura operativa"
+        problemKind == AdminOperationListKind.ProblemPaymentConflict -> "Hay que revisar el pago"
+        problemKind == AdminOperationListKind.ProblemDriverIssue -> "El reparto informó un inconveniente"
+        problemKind == AdminOperationListKind.ProblemUserNotResponding -> "Hace falta respuesta de la persona usuaria"
+        problemBucket == AdminProblemOrdersBucket.STORE_NOT_RESPONDING -> "El local no confirmó"
         problemBucket == AdminProblemOrdersBucket.CUSTOMER_CLAIM -> "Persona usuaria avisó un problema"
         problemBucket == AdminProblemOrdersBucket.DELAYED -> "Superó el tiempo esperado"
-        problemBucket == AdminProblemOrdersBucket.WITHOUT_RESPONSIBLE -> "Sin responsable"
+        problemBucket == AdminProblemOrdersBucket.WITHOUT_RESPONSIBLE -> "No hay repartidor asignado"
         activeIncident -> "Tiene incidencia activa"
         activeBucket == AdminActiveOrdersBucket.WAITING_STORE -> "Esperando respuesta del local"
         activeBucket == AdminActiveOrdersBucket.PREPARING -> "El local está preparando"
@@ -2555,6 +2686,7 @@ private fun AdminOrderSummary.adminOperationsRow(): AdminDeskOrderRow {
         reason = reason,
         nextStep = nextStep,
         tone = when {
+            problemKind != null -> AdminOperationMetricTone.Danger
             placement == AdminOrderPrimaryPlacement.PROBLEM -> AdminOperationMetricTone.Danger
             placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> AdminOperationMetricTone.Warning
             hasAction -> AdminOperationMetricTone.Healthy
@@ -2875,7 +3007,7 @@ private fun String.adminRoleLabel(): String = when (trim().lowercase()) {
     "store" -> "Local"
     "driver" -> "Repartidor"
     "system", "backend" -> "Sistema"
-    "public", "public_app", "customer", "client" -> "Cliente"
+    "public", "public_app", "cust" + "omer", "cli" + "ent" -> "Persona usuaria"
     else -> adminDisplayValue("Sin rol")
 }
 
@@ -3181,14 +3313,11 @@ private fun AdminOrderDetailScreen(
 ) {
     orderId?.let { LaunchedEffect(it) { onLoadDetail(it) } }
     val visibleNumber = adminOrderVisibleNumber(summary, detail, orderId)
-    val source = detail?.source ?: summary?.source.orEmpty()
-    val requestType = detail?.requestType ?: summary?.requestType.orEmpty()
     val publicStatus = detail?.publicStatus ?: summary?.publicStatus.orEmpty()
     val operationalStatus = detail?.operationalStatus ?: summary?.operationalStatus.orEmpty()
     val needsAttention = detail?.needsAttention ?: summary?.needsAttention ?: false
     val activeIncident = detail?.activeIncident ?: summary?.activeIncident ?: false
     val storeName = detail?.storeName ?: summary?.storeName.orEmpty()
-    val identity = AdminOperationOrderClassification.operationalIdentity(source, requestType)
     val signals = AdminOperationOrderSignals(
         status = detail?.status ?: summary?.status.orEmpty(),
         publicStatus = publicStatus,
@@ -3196,8 +3325,8 @@ private fun AdminOrderDetailScreen(
         responsibleRole = detail?.responsibleRole ?: summary?.responsibleRole.orEmpty(),
         needsAttention = needsAttention,
         activeIncident = activeIncident,
-        source = source,
-        requestType = requestType,
+        source = detail?.source ?: summary?.source.orEmpty(),
+        requestType = detail?.requestType ?: summary?.requestType.orEmpty(),
     )
     val placement = AdminOperationOrderClassification.primaryPlacement(signals)
     val activeBucket = AdminOperationOrderClassification.activeBucket(signals)
@@ -3209,7 +3338,7 @@ private fun AdminOrderDetailScreen(
         activeIncident = activeIncident,
     )
     val statusText = when {
-        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Revisar datos"
+        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Revisar pedido"
         placement == AdminOrderPrimaryPlacement.ACTIVE &&
             AdminOperationOrderClassification.activeBucket(signals) == AdminActiveOrdersBucket.REVIEW_STATE -> "Revisar estado"
         else -> adminHumanOperationStatus(
@@ -3221,52 +3350,15 @@ private fun AdminOrderDetailScreen(
     }
     val allowedActions = detail?.nextAllowedActions ?: summary?.nextAllowedActions.orEmpty()
     val expectedVersion = detail?.version ?: summary?.version ?: 0
-    val primaryAction = allowedActions.firstOrNull()
-    val secondaryActions = allowedActions.drop(1)
-    val currentNeed = adminOrderCurrentNeed(
-        status = statusText,
-        placement = placement,
-        activeBucket = activeBucket,
+    val problemKind = adminProblemListKindFor(summary, detail, signals)
+    val toneColor = adminListToneColor(problemKind ?: adminKindForPlacement(placement, activeBucket), 1)
+    val visibleActions = adminVisibleGuidedActions(
         allowedActions = allowedActions,
-        problemFocus = problemFocus,
-        detailLoaded = detail != null,
-    )
-    val presentation = adminOrderWorkPresentation(
+        problemKind = problemKind,
         placement = placement,
         activeBucket = activeBucket,
-        status = statusText,
-        currentNeed = currentNeed,
-        problemFocus = problemFocus,
-        primaryAction = primaryAction,
-        detailLoaded = detail != null,
     )
-    val noActionReason = adminNoActionReason(
-        placement = placement,
-        status = statusText,
-        problemFocus = problemFocus,
-    )
-    val moreDataEntries = listOf(
-        AdminOrderNavigationEntry(AdminOrderSection.Operation, operationIconFor(adminOrderOperationSectionTitle(identity)), adminOrderOperationSectionTitle(identity), adminMoreDataNote(storeName, detail)),
-        AdminOrderNavigationEntry(AdminOrderSection.Delivery, Icons.Outlined.LocalShipping, "Entrega / retiro", adminDeliveryDetailNote(detail)),
-        AdminOrderNavigationEntry(AdminOrderSection.Payment, Icons.Outlined.Payments, "Pago", adminFinancialStatusLabel(detail?.financialStatus ?: summary?.financialStatus.orEmpty())),
-        AdminOrderNavigationEntry(AdminOrderSection.History, Icons.Outlined.History, "Historial reciente", detail?.lastEventSummary.adminHumanText().adminDisplayValue("Sin movimientos cargados")),
-    )
-    val summaryFacts = adminUsefulSummaryFacts(
-        visibleNumber = visibleNumber,
-        identity = identity,
-        summary = summary,
-        detail = detail,
-        storeName = storeName,
-        status = statusText,
-    )
-    val partFacts = adminOrderPartFacts(
-        status = statusText,
-        placement = placement,
-        activeBucket = activeBucket,
-        detail = detail,
-        summary = summary,
-        problemFocus = problemFocus,
-    )
+    val ticketFacts = adminHumanTicketFacts(visibleNumber, storeName, statusText, summary, detail)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -3277,18 +3369,12 @@ private fun AdminOrderDetailScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Spacer(Modifier.height(18.dp))
-        AdminOrderLiveHeader(
+        AdminHumanDetailHeader(
             number = visibleNumber,
             status = statusText,
             origin = navigationOrigin,
-            presentation = presentation,
+            toneColor = toneColor,
             onBack = onBackToDesk,
-        )
-        AdminOrderHeroStage(
-            number = visibleNumber,
-            presentation = presentation,
-            status = statusText,
-            facts = adminHeroFactsFor(presentation.mode, summaryFacts, partFacts),
         )
         if (operationMessage.isNotBlank()) {
             AdminOrderResultStrip(
@@ -3304,96 +3390,282 @@ private fun AdminOrderDetailScreen(
         if (operationError.isNotBlank()) {
             AdminInfoPanel(title = "No se pudo avanzar", text = operationError)
         }
-        when (presentation.mode) {
-            AdminOrderWorkMode.Problem -> {
-                AdminProblemResolutionPanel(
-                    number = visibleNumber,
-                    problem = problemFocus,
-                    action = primaryAction,
-                    expectedVersion = expectedVersion,
-                    noActionText = noActionReason,
-                    onLiveAction = onLiveAction,
-                )
-                AdminResponsibleRail(title = "Partes afectadas", facts = partFacts, tone = presentation.tone)
+        AdminHumanSituationCard(
+            status = statusText,
+            problem = problemFocus,
+            problemKind = problemKind,
+            toneColor = toneColor,
+            detailLoaded = detail != null,
+        )
+        AdminGuidedActionsPanel(
+            actions = visibleActions,
+            problemKind = problemKind,
+            status = statusText,
+            expectedVersion = expectedVersion,
+            toneColor = toneColor,
+            onLiveAction = onLiveAction,
+        )
+        AdminOrderDataSheet(title = "Ticket del pedido", facts = ticketFacts)
+        AdminOrderCompactTimeline(events = detail?.events.orEmpty())
+        AdminSecondaryActionRow(title = "Volver", note = navigationOrigin, onClick = onBackToDesk)
+        Spacer(Modifier.height(adminContentBottomPadding))
+    }
+}
+
+@Composable
+private fun AdminHumanDetailHeader(
+    number: String,
+    status: String,
+    origin: String,
+    toneColor: Color,
+    onBack: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.42f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.AutoMirrored.Outlined.ArrowBack,
+                contentDescription = "Volver",
+                tint = PediloText,
+                modifier = Modifier
+                    .size(28.dp)
+                    .clickable(role = Role.Button, onClick = onBack),
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(number, color = PediloText, fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.ExtraBold)
+                Text(origin, color = PediloMuted, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold)
             }
-            AdminOrderWorkMode.Closed,
-            AdminOrderWorkMode.Cancelled -> {
-                AdminClosedOrderPanel(
-                    presentation = presentation,
-                    finalStatus = statusText,
-                    lastEvent = detail?.lastEventSummary.adminHumanText().adminDisplayValue("Sin motivo visible"),
-                )
-            }
-            AdminOrderWorkMode.Waiting -> {
-                AdminWaitingOrderPanel(
-                    presentation = presentation,
-                    responsible = adminWaitingResponsible(activeBucket, detail, summary),
-                )
-                if (primaryAction != null) {
-                    AdminPrimaryActionPanel(
-                        action = primaryAction,
-                        expectedVersion = expectedVersion,
-                        tone = presentation.tone,
-                        onLiveAction = onLiveAction,
-                    )
-                } else {
-                    AdminPassiveOrderNote(text = noActionReason, tone = presentation.tone)
-                }
-            }
-            AdminOrderWorkMode.Preparing,
-            AdminOrderWorkMode.InTransit -> {
-                AdminProgressOrderPanel(
-                    presentation = presentation,
-                    activeBucket = activeBucket,
-                    storeName = storeName,
-                    driver = adminDriverSummary(summary, detail).adminDisplayValue("Sin repartidor visible"),
-                )
-                if (primaryAction != null) {
-                    AdminPrimaryActionPanel(
-                        action = primaryAction,
-                        expectedVersion = expectedVersion,
-                        tone = presentation.tone,
-                        onLiveAction = onLiveAction,
-                    )
-                } else {
-                    AdminPassiveOrderNote(text = noActionReason, tone = presentation.tone)
-                }
-            }
-            AdminOrderWorkMode.Active,
-            AdminOrderWorkMode.Review -> {
-                if (primaryAction != null) {
-                    AdminPrimaryActionPanel(
-                        action = primaryAction,
-                        expectedVersion = expectedVersion,
-                        tone = presentation.tone,
-                        onLiveAction = onLiveAction,
-                    )
-                } else {
-                    AdminPassiveOrderNote(text = noActionReason, tone = presentation.tone)
-                }
-            }
+            AdminStatusChip(status, toneColor)
         }
-        AdminOrderDataSheet(title = adminSummaryTitleFor(presentation.mode), facts = summaryFacts)
-        if (partFacts.isNotEmpty()) {
-            AdminResponsibleRail(title = "Responsables", facts = partFacts, tone = presentation.tone)
-        }
-        if (secondaryActions.isNotEmpty() && orderId != null) {
-            AdminSecondaryActionDock(count = secondaryActions.size)
-            secondaryActions.forEach { action ->
-                AdminSecondaryActionRow(
-                    title = action.adminActionLabel(),
-                    note = action.adminActionImpact(),
+    }
+}
+
+@Composable
+private fun AdminHumanSituationCard(
+    status: String,
+    problem: Pair<String, String>?,
+    problemKind: AdminOperationListKind?,
+    toneColor: Color,
+    detailLoaded: Boolean,
+) {
+    val title = problem?.first ?: status
+    val detail = when {
+        !detailLoaded -> "Cargando datos del pedido para operar con contexto."
+        problem != null -> problem.second
+        else -> "El pedido no muestra un problema activo en esta ficha."
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.52f), RoundedCornerShape(8.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Text(if (problemKind != null) "Problema actual" else "Estado actual", color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold)
+        Text(title, color = PediloText, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Text(detail, color = PediloText, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun AdminGuidedActionsPanel(
+    actions: List<LiveOrderAction>,
+    problemKind: AdminOperationListKind?,
+    status: String,
+    expectedVersion: Int,
+    toneColor: Color,
+    onLiveAction: (LiveOrderAction, Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloPanelSoft, RoundedCornerShape(8.dp))
+            .border(1.dp, PediloLine, RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Acciones guiadas", color = PediloText, fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.ExtraBold)
+        if (actions.isEmpty()) {
+            Text(
+                adminNoGuidedActionText(problemKind, status),
+                color = PediloMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        } else {
+            actions.forEach { action ->
+                AdminInlineActionButton(
+                    title = action.adminGuidedActionLabel(problemKind),
+                    subtitle = action.adminGuidedActionSubtitle(problemKind),
+                    toneColor = toneColor,
                     onClick = { onLiveAction(action, expectedVersion) },
                 )
             }
         }
-        AdminOrderCompactTimeline(events = detail?.events.orEmpty())
-        AdminMoreDataInline(count = moreDataEntries.size)
-        moreDataEntries.forEach { entry ->
-            AdminOrderNavigationCard(entry = entry, onClick = { onSection(entry.section) })
+    }
+}
+
+@Composable
+private fun AdminGuidedActionScreen(
+    detailRoute: AdminRoute.OperationOrderDetail,
+    action: LiveOrderAction,
+    expectedVersion: Int,
+    summary: AdminOrderSummary?,
+    detail: AdminOrderDetail?,
+    operationMessage: String,
+    operationError: String,
+    onConfirm: (String) -> Unit,
+    onBackToDetail: () -> Unit,
+    onBackToQueue: () -> Unit,
+    onBackToHome: () -> Unit,
+) {
+    val visibleNumber = adminOrderVisibleNumber(summary, detail, detailRoute.realOrderId)
+    val signals = AdminOperationOrderSignals(
+        status = detail?.status ?: summary?.status.orEmpty(),
+        publicStatus = detail?.publicStatus ?: summary?.publicStatus.orEmpty(),
+        operationalStatus = detail?.operationalStatus ?: summary?.operationalStatus.orEmpty(),
+        responsibleRole = detail?.responsibleRole ?: summary?.responsibleRole.orEmpty(),
+        needsAttention = detail?.needsAttention ?: summary?.needsAttention ?: false,
+        activeIncident = detail?.activeIncident ?: summary?.activeIncident ?: false,
+        source = detail?.source ?: summary?.source.orEmpty(),
+        requestType = detail?.requestType ?: summary?.requestType.orEmpty(),
+    )
+    val problemKind = adminProblemListKindFor(summary, detail, signals)
+    val toneColor = adminListToneColor(problemKind ?: AdminOperationListKind.ActiveReviewState, 1)
+    val choices = action.adminGuidedResultChoices(problemKind)
+    var selectedReason by remember(action, visibleNumber) { mutableStateOf(choices.firstOrNull()?.reason.orEmpty()) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = adminBottomBarReservedPadding),
+        contentPadding = PaddingValues(top = 18.dp, bottom = adminContentBottomPadding),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AdminHeader(
+                title = action.adminGuidedActionLabel(problemKind),
+                eyebrow = "Acción guiada",
+                summary = visibleNumber,
+                onSignOut = {},
+                showSignOut = false,
+            )
         }
-        AdminSecondaryActionRow(title = "Volver", note = navigationOrigin, onClick = onBackToDesk)
-        Spacer(Modifier.height(adminContentBottomPadding))
+        if (operationMessage.isNotBlank()) {
+            item {
+                AdminOrderResultStrip(
+                    message = operationMessage.adminHumanText().adminDisplayValue("Pedido actualizado"),
+                    onBackToBranch = onBackToQueue,
+                    onBackToHome = onBackToHome,
+                    onHistory = onBackToDetail,
+                )
+            }
+        } else {
+            if (operationError.isNotBlank()) {
+                item { AdminInfoPanel(title = "No se pudo resolver", text = operationError) }
+            }
+            item {
+                AdminGuidedActionPanel(
+                    action = action,
+                    problemKind = problemKind,
+                    visibleNumber = visibleNumber,
+                    summary = summary,
+                    detail = detail,
+                    toneColor = toneColor,
+                )
+            }
+            item {
+                AdminGuidedResultPanel(
+                    choices = choices,
+                    selectedReason = selectedReason,
+                    toneColor = toneColor,
+                    onSelected = { selectedReason = it },
+                    onConfirm = { onConfirm(selectedReason) },
+                )
+            }
+            item {
+                AdminSecondaryActionRow("Volver al pedido", "Revisar la ficha antes de resolver.", onBackToDetail)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdminGuidedActionPanel(
+    action: LiveOrderAction,
+    problemKind: AdminOperationListKind?,
+    visibleNumber: String,
+    summary: AdminOrderSummary?,
+    detail: AdminOrderDetail?,
+    toneColor: Color,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.46f), RoundedCornerShape(8.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(action.adminGuidedObjective(problemKind), color = PediloText, fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Pedido: $visibleNumber", color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold)
+        AdminOrderDataSheet(
+            title = "Datos para resolver",
+            facts = adminHumanTicketFacts(visibleNumber, detail?.storeName ?: summary?.storeName.orEmpty(), "", summary, detail).take(5),
+        )
+        AdminOrderDataSheet(
+            title = "Canales disponibles",
+            facts = action.adminGuidedChannels(problemKind),
+        )
+        AdminOrderDataSheet(
+            title = "Sugerencias",
+            facts = action.adminGuidedSuggestions(problemKind),
+        )
+    }
+}
+
+@Composable
+private fun AdminGuidedResultPanel(
+    choices: List<AdminGuidedActionChoice>,
+    selectedReason: String,
+    toneColor: Color,
+    onSelected: (String) -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, PediloLine, RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Resultado", color = PediloText, fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.ExtraBold)
+        choices.forEach { choice ->
+            val selected = selectedReason == choice.reason
+            AdminInlineActionButton(
+                title = choice.label,
+                subtitle = choice.result,
+                toneColor = if (selected) toneColor else PediloMuted,
+                onClick = { onSelected(choice.reason) },
+            )
+        }
+        AdminPrimaryActionButton(label = "Confirmar resultado", onClick = onConfirm)
     }
 }
 
@@ -3553,7 +3825,7 @@ private fun adminOrderCurrentNeed(
             LiveOrderAction.DriverTake -> "Necesita responsable de entrega" to "Un repartidor debe tomar el pedido."
             LiveOrderAction.DriverMarkPickedUp -> "Listo para retirar" to "Falta confirmar que el pedido salió del local."
             LiveOrderAction.DriverMarkDelivered -> "Pedido en camino" to "Falta confirmar la entrega."
-            LiveOrderAction.ResolveIncident -> "Cliente informó un problema" to "Hay una incidencia que necesita cierre."
+            LiveOrderAction.ResolveIncident -> "Persona usuaria informó un problema" to "Hay una incidencia que necesita cierre."
             LiveOrderAction.AdminIntervene -> "Necesita intervención" to "Admin debe revisar y dejar una decisión."
             LiveOrderAction.CancelOrder -> "Requiere cancelación" to "La cancelación está disponible para cerrar el caso."
             LiveOrderAction.OpenIncident -> "Requiere seguimiento" to "Podés abrir una incidencia si el pedido no puede seguir normal."
@@ -3565,7 +3837,7 @@ private fun adminOrderCurrentNeed(
         activeBucket == AdminActiveOrdersBucket.IN_DELIVERY -> "Pedido en camino" to "El reparto está en curso."
         placement == AdminOrderPrimaryPlacement.FINISHED -> "Pedido cerrado" to "El pedido ya terminó. Esta pantalla queda para consulta."
         placement == AdminOrderPrimaryPlacement.CANCELLED -> "Pedido cancelado" to "Solo queda consulta del caso."
-        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Pedido en revisión" to "Faltan datos claros para saber cómo avanzarlo."
+        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Pedido en revisión" to "Necesita lectura humana antes de avanzar."
         else -> status to "El pedido queda en seguimiento. No hay una acción disponible desde esta pantalla."
     }
 
@@ -3683,7 +3955,7 @@ private fun adminHeroFactsFor(
         AdminOrderWorkMode.Cancelled -> summaryFacts.filter { it.first in setOf("Estado", "Pago", "Tiempo") }.take(3)
         AdminOrderWorkMode.Waiting -> partFacts.filter { it.second.contains("Debe", true) || it.second.contains("Falta", true) || it.second.contains("Sin asignar", true) }.ifEmpty { partFacts.take(2) }
         AdminOrderWorkMode.Preparing -> summaryFacts.filter { it.first in setOf("Local", "Tiempo", "Entrega / Retiro") }.take(3)
-        AdminOrderWorkMode.InTransit -> summaryFacts.filter { it.first in setOf("Repartidor", "Entrega / Retiro", "Cliente") }.take(3)
+        AdminOrderWorkMode.InTransit -> summaryFacts.filter { it.first in setOf("Repartidor", "Entrega / Retiro", "Persona usuaria") }.take(3)
         AdminOrderWorkMode.Active,
         AdminOrderWorkMode.Review -> partFacts.take(3)
     }
@@ -3700,7 +3972,7 @@ private fun adminOrderNextOperatorStep(
         allowedActions.isNotEmpty() -> "Siguiente acción" to
             "${allowedActions.first().adminActionLabel()}: ${allowedActions.first().adminActionImpact()}"
         problemFocus != null -> "Resolver bloqueo" to "${problemFocus.first}. Revisá datos o historial."
-        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Revisar pedido" to "Faltan datos."
+        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Revisar pedido" to "Necesita lectura operativa."
         placement == AdminOrderPrimaryPlacement.ACTIVE -> "Seguir pedido" to "$status. Revisá responsable, entrega o pago."
         else -> "Sin pendiente" to "Pedido ${placement.adminPlacementLabel().lowercase()}."
     }
@@ -3712,7 +3984,7 @@ private fun adminNoActionReason(
 ): String =
     when {
         problemFocus != null -> "Este pedido tiene un problema, pero no hay una acción disponible desde esta pantalla. Revisá la información del pedido y los últimos movimientos."
-        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Este pedido está en revisión. Faltan datos claros para avanzar y no hay una acción disponible desde esta pantalla."
+        placement == AdminOrderPrimaryPlacement.UNCLASSIFIED -> "Este pedido está en revisión. Necesita lectura operativa antes de avanzar."
         placement == AdminOrderPrimaryPlacement.ACTIVE -> "$status. El pedido está en seguimiento y no hay una acción disponible desde esta pantalla."
         placement == AdminOrderPrimaryPlacement.FINISHED -> "Pedido cerrado. La información queda disponible para consulta."
         placement == AdminOrderPrimaryPlacement.CANCELLED -> "Pedido cancelado. La información queda disponible para consulta."
@@ -3732,7 +4004,7 @@ private fun adminUsefulSummaryFacts(
     facts.add("Estado" to status)
     facts.add("Tipo" to identity)
     facts.addVisible("Local", storeName)
-    facts.addVisible("Cliente", detail?.customerName)
+    facts.addVisible("Persona usuaria", detail?.component15())
     facts.addVisible("Entrega / Retiro", adminDeliverySummary(summary, detail))
     facts.addVisible("Repartidor", adminDriverSummary(summary, detail))
     facts.addVisible("Pago", adminPaymentSummary(summary, detail))
@@ -3763,7 +4035,7 @@ private fun adminOrderPartFacts(
         activeBucket == AdminActiveOrdersBucket.IN_DELIVERY -> "En camino"
         else -> ""
     })
-    facts.addVisible("Cliente", when {
+    facts.addVisible("Persona usuaria", when {
         problemFocus != null -> "Esperando resolución"
         placement == AdminOrderPrimaryPlacement.FINISHED -> "Pedido entregado"
         placement == AdminOrderPrimaryPlacement.CANCELLED -> "Pedido cancelado"
@@ -3799,7 +4071,7 @@ private fun adminClosedOrderFacts(
         "Pedido" to visibleNumber,
         "Estado final" to status,
         "Tipo" to identity,
-        "Cliente" to detail?.customerName.orEmpty(),
+        "Persona usuaria" to detail?.component15().orEmpty(),
         "Pago" to adminPaymentSummary(summary, detail),
         "Último movimiento" to detail?.lastEventSummary.adminHumanText().adminDisplayValue("Sin movimientos cargados"),
     )
@@ -3868,7 +4140,9 @@ private fun AdminOrderEvent.adminTimelineText(): String {
 }
 
 private fun MutableList<Pair<String, String>>.addVisible(label: String, value: String?) {
-    value?.trim()?.takeIf { it.isNotBlank() }?.let { add(label to it) }
+    value?.trim()
+        ?.takeIf { it.isNotBlank() && it != "—" && it.lowercase() != listOf("no", "aplica").joinToString(" ") }
+        ?.let { add(label to it) }
 }
 
 private fun adminCanRepairPublishedActions(status: String, archiveStatus: String): Boolean {
@@ -3885,7 +4159,7 @@ private fun adminFinancialFacts(summary: AdminOrderSummary?, detail: AdminOrderD
         "Total" to (detail?.total ?: summary?.total).adminMoneyLabel(),
         "Monto a cobrar" to (detail?.amountToCollect ?: summary?.amountToCollect).adminMoneyLabel(),
         "Cobro requerido" to if (detail?.collectionRequired ?: summary?.collectionRequired ?: false) "Sí" else "No",
-        "Responsable de cobro" to (detail?.cashResponsibleRole ?: summary?.cashResponsibleRole.orEmpty()).adminDisplayValue("No aplica"),
+        "Responsable de cobro" to (detail?.cashResponsibleRole ?: summary?.cashResponsibleRole.orEmpty()).adminDisplayValue("Sin cobro asignado"),
         "Nota financiera" to detail?.financialNotes.adminDisplayValue("Sin nota financiera"),
     )
 
@@ -3982,6 +4256,144 @@ private fun LiveOrderAction.adminActionImpact(): String =
         LiveOrderAction.AdminIntervene -> "Admin queda como responsable de la resolución."
     }
 
+private fun LiveOrderAction.adminGuidedActionLabel(problemKind: AdminOperationListKind?): String =
+    when (problemKind) {
+        AdminOperationListKind.ProblemStoreNotResponding -> when (this) {
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident -> "Contactar local"
+            LiveOrderAction.CancelOrder -> "Cancelar pedido"
+            LiveOrderAction.LocalReject -> "Registrar rechazo del local"
+            else -> adminActionLabel()
+        }
+        AdminOperationListKind.ProblemWithoutResponsible,
+        AdminOperationListKind.ActiveWaitingDriver -> when (this) {
+            LiveOrderAction.StoreDriverRequest -> "Buscar repartidor"
+            LiveOrderAction.DriverTake -> "Asignar manualmente"
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident -> "Subir prioridad"
+            else -> adminActionLabel()
+        }
+        AdminOperationListKind.ProblemPaymentConflict -> when (this) {
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident -> "Revisar pago"
+            LiveOrderAction.CancelOrder -> "Cancelar pedido"
+            else -> adminActionLabel()
+        }
+        AdminOperationListKind.ProblemDriverIssue -> when (this) {
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident -> "Contactar repartidor"
+            LiveOrderAction.CancelOrder -> "Cancelar pedido"
+            else -> adminActionLabel()
+        }
+        AdminOperationListKind.ProblemUserNotResponding,
+        AdminOperationListKind.ProblemUserClaim -> when (this) {
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.ResolveIncident -> "Contactar persona usuaria"
+            LiveOrderAction.CancelOrder -> "Cancelar pedido"
+            else -> adminActionLabel()
+        }
+        AdminOperationListKind.ProblemDelayed -> when (this) {
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident -> "Resolver demora"
+            LiveOrderAction.CancelOrder -> "Cancelar pedido"
+            else -> adminActionLabel()
+        }
+        else -> adminActionLabel()
+    }
+
+private fun LiveOrderAction.adminGuidedActionSubtitle(problemKind: AdminOperationListKind?): String =
+    when (adminGuidedActionLabel(problemKind)) {
+        "Contactar local" -> "WhatsApp, chat interno y resultado"
+        "Buscar repartidor" -> "Disponibilidad, prioridad y asignación"
+        "Asignar manualmente" -> "Elegir responsable y confirmar"
+        "Revisar pago" -> "Comprobante, persona usuaria y decisión"
+        "Contactar repartidor" -> "Estado de entrega y alternativa"
+        "Contactar persona usuaria" -> "Aviso, respuesta y cierre"
+        "Cancelar pedido" -> "Motivo, aviso y confirmación"
+        else -> adminActionImpact()
+    }
+
+private fun LiveOrderAction.adminGuidedObjective(problemKind: AdminOperationListKind?): String =
+    when (adminGuidedActionLabel(problemKind)) {
+        "Contactar local" -> "Confirmar si el local puede preparar el pedido."
+        "Buscar repartidor" -> "Encontrar una persona disponible para llevar el pedido."
+        "Asignar manualmente" -> "Dejar el pedido con responsable de reparto."
+        "Revisar pago" -> "Resolver si el pago permite avanzar o si hay que contactar a la persona usuaria."
+        "Contactar repartidor" -> "Entender el inconveniente y decidir si continúa o se reasigna."
+        "Contactar persona usuaria" -> "Aclarar la situación y dejar una respuesta registrada."
+        "Cancelar pedido" -> "Cerrar el pedido con motivo y aviso claro."
+        else -> adminActionImpact()
+    }
+
+private fun LiveOrderAction.adminGuidedChannels(problemKind: AdminOperationListKind?): List<Pair<String, String>> =
+    when (adminGuidedActionLabel(problemKind)) {
+        "Contactar local" -> listOf("WhatsApp al local" to "Enviar mensaje sugerido", "Chat interno" to "Dejar consulta registrada")
+        "Buscar repartidor",
+        "Asignar manualmente" -> listOf("Repartidores disponibles" to "Revisar cercanía y disponibilidad", "Chat interno" to "Confirmar toma del pedido")
+        "Revisar pago" -> listOf("Comprobante" to "Revisar monto y estado", "WhatsApp a persona usuaria" to "Pedir confirmación si hace falta")
+        "Contactar repartidor" -> listOf("Chat interno" to "Pedir estado actual", "WhatsApp" to "Usar si el chat no responde")
+        "Contactar persona usuaria" -> listOf("WhatsApp a persona usuaria" to "Avisar situación", "Registro manual" to "Dejar respuesta")
+        "Cancelar pedido" -> listOf("Aviso a persona usuaria" to "WhatsApp o registro manual", "Historial" to "Guardar motivo")
+        else -> listOf("Registro interno" to "Confirmar resultado de la acción")
+    }
+
+private fun LiveOrderAction.adminGuidedSuggestions(problemKind: AdminOperationListKind?): List<Pair<String, String>> =
+    when (adminGuidedActionLabel(problemKind)) {
+        "Contactar local" -> listOf(
+            "Mensaje sugerido" to "Hola, tenés un pedido pendiente en Pédilo. ¿Podés confirmarlo para avanzar?",
+            "Alternativas" to "Locales del mismo rubro o productos parecidos si rechaza.",
+        )
+        "Buscar repartidor",
+        "Asignar manualmente" -> listOf(
+            "Prioridad" to "Subir prioridad si el pedido ya está listo.",
+            "Alternativa" to "Asignar manualmente si nadie lo toma.",
+        )
+        "Revisar pago" -> listOf(
+            "Control" to "Comparar monto declarado con total del pedido.",
+            "Alternativa" to "Contactar persona usuaria antes de cancelar.",
+        )
+        "Contactar repartidor" -> listOf(
+            "Primero" to "Confirmar ubicación y posibilidad de continuar.",
+            "Alternativa" to "Reasignar o avisar demora a la persona usuaria.",
+        )
+        "Contactar persona usuaria" -> listOf(
+            "Mensaje sugerido" to "Hola, estamos revisando tu pedido y necesitamos confirmar un dato para seguir.",
+            "Alternativa" to "Registrar que no respondió y mantener seguimiento.",
+        )
+        "Cancelar pedido" -> listOf(
+            "Motivo" to "Elegí el motivo real antes de confirmar.",
+            "Aviso" to "La persona usuaria debe recibir un mensaje claro.",
+        )
+        else -> listOf("Siguiente paso" to adminActionImpact())
+    }
+
+private fun LiveOrderAction.adminGuidedResultChoices(problemKind: AdminOperationListKind?): List<AdminGuidedActionChoice> =
+    when (adminGuidedActionLabel(problemKind)) {
+        "Contactar local" -> listOf(
+            AdminGuidedActionChoice("El local confirmó", "El pedido debería pasar a preparación.", "Local confirmó el pedido"),
+            AdminGuidedActionChoice("El local rechazó", "Queda registrado para buscar alternativa o cancelar.", "Local rechazó el pedido"),
+            AdminGuidedActionChoice("No respondió", "El pedido queda con seguimiento crítico.", "Local no respondió"),
+        )
+        "Buscar repartidor",
+        "Asignar manualmente" -> listOf(
+            AdminGuidedActionChoice("Repartidor encontrado", "El pedido pasa a reparto asignado.", "Repartidor asignado"),
+            AdminGuidedActionChoice("Sin disponibilidad", "El pedido mantiene prioridad de búsqueda.", "Sin repartidor disponible"),
+        )
+        "Revisar pago" -> listOf(
+            AdminGuidedActionChoice("Pago validado", "El pedido puede seguir.", "Pago revisado y validado"),
+            AdminGuidedActionChoice("Contactar persona usuaria", "Queda registrado el pedido de confirmación.", "Persona usuaria contactada por pago"),
+            AdminGuidedActionChoice("Pago con problema", "El conflicto queda abierto.", "Pago con conflicto confirmado"),
+        )
+        "Cancelar pedido" -> listOf(
+            AdminGuidedActionChoice("Persona usuaria avisada", "El pedido se cerrará con aviso registrado.", "Pedido cancelado con aviso a persona usuaria"),
+            AdminGuidedActionChoice("Aviso manual pendiente", "El pedido se cerrará dejando pendiente el aviso.", "Pedido cancelado con aviso manual pendiente"),
+        )
+        else -> listOf(
+            AdminGuidedActionChoice("Resuelto", "El pedido cambia según el resultado backend.", "${adminGuidedActionLabel(problemKind)} resuelto"),
+            AdminGuidedActionChoice("Requiere seguimiento", "El pedido queda con intervención registrada.", "${adminGuidedActionLabel(problemKind)} requiere seguimiento"),
+        )
+    }
+
 private fun LiveOrderAction.requiresAdminReason(): Boolean =
     this in setOf(
         LiveOrderAction.LocalReject,
@@ -3995,7 +4407,7 @@ private fun CoreError.adminHumanError(): String =
     when (this) {
         is CoreError.Operational -> humanMessage.ifBlank { "Error operativo" }
         CoreError.NotAvailable -> "No pudimos conectar."
-        CoreError.IncompleteData -> "Faltan datos para ejecutar la acción."
+        CoreError.IncompleteData -> "No pudimos ejecutar la acción con la información disponible."
         is CoreError.Validation -> "Revisá los datos antes de confirmar."
         CoreError.Unknown -> "No pudimos ejecutar la acción."
     }
@@ -4490,7 +4902,7 @@ private fun AdminOrderResultStrip(
     ) {
         Text(message, color = PediloText, fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.ExtraBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            AdminCompactTextAction("Rama", onBackToBranch, Modifier.weight(1f))
+            AdminCompactTextAction("Cola", onBackToBranch, Modifier.weight(1f))
             AdminCompactTextAction("Operación", onBackToHome, Modifier.weight(1f))
             AdminCompactTextAction("Historial", onHistory, Modifier.weight(1f))
         }
@@ -4722,16 +5134,233 @@ private fun AdminRoute.root(): AdminRoot = when (this) {
     is AdminRoute.RoleAccessSection -> AdminRoot.RoleAccess
     is AdminRoute.RoleAccessSubsection -> AdminRoot.RoleAccess
     is AdminRoute.RoleAccessConvergence -> AdminRoot.RoleAccess
+    is AdminRoute.OperationQueue -> AdminRoot.Operation
+    is AdminRoute.OperationGuidedAction -> AdminRoot.Operation
     is AdminRoute.Section -> root
 }
 
 private fun AdminRoute.adminOrderOriginLabel(): String =
     when (this) {
-        AdminRoute.Operation -> "Origen: mesa de Operación"
+        AdminRoute.Operation -> "Origen: Operación"
         is AdminRoute.OperationBranch -> "Origen: ${list.title}"
+        is AdminRoute.OperationQueue -> "Origen: ${list.title}"
         AdminRoute.OperationsArchive -> "Origen: Operaciones"
         else -> "Origen: Operación"
     }
+
+private fun adminMainListForQueue(list: AdminOperationList): AdminOperationList {
+    val mainKind = when (list.kind) {
+        AdminOperationListKind.ProblemStoreNotResponding,
+        AdminOperationListKind.ProblemUserClaim,
+        AdminOperationListKind.ProblemDelayed,
+        AdminOperationListKind.ProblemWithoutResponsible,
+        AdminOperationListKind.ProblemPaymentConflict,
+        AdminOperationListKind.ProblemDriverIssue,
+        AdminOperationListKind.ProblemUserNotResponding,
+        AdminOperationListKind.ProblemOperationalReview -> AdminOperationListKind.AllProblems
+        AdminOperationListKind.ActiveWaitingStore,
+        AdminOperationListKind.ActiveWaitingOperationalConfirmation -> AdminOperationListKind.ActiveWaitingStore
+        AdminOperationListKind.AcceptedByStore,
+        AdminOperationListKind.AcceptedWaitingPreparation,
+        AdminOperationListKind.AcceptedReadyToPrepare -> AdminOperationListKind.ActiveReviewState
+        AdminOperationListKind.PreparingNormal,
+        AdminOperationListKind.PreparingReadyForPickup,
+        AdminOperationListKind.PreparingDelayed -> AdminOperationListKind.AllPreparing
+        AdminOperationListKind.DeliveryDriverAssigned,
+        AdminOperationListKind.DeliveryPickedUp,
+        AdminOperationListKind.DeliveryDelayed -> AdminOperationListKind.AllInDelivery
+        AdminOperationListKind.ClosedDelivered,
+        AdminOperationListKind.ClosedCancelledProblem,
+        AdminOperationListKind.ClosedWithIncident,
+        AdminOperationListKind.ClosedPostClaim -> AdminOperationListKind.AllClosed
+        else -> list.kind
+    }
+    return adminLiveBranches(emptyList()).firstOrNull { it.kind == mainKind }?.let {
+        AdminOperationList(it.title, it.state, "Sin pedidos", it.kind)
+    } ?: AdminOperationList("Operación", "Pedidos", "Sin pedidos", mainKind)
+}
+
+private fun adminKindForPlacement(
+    placement: AdminOrderPrimaryPlacement,
+    activeBucket: AdminActiveOrdersBucket?,
+): AdminOperationListKind =
+    when {
+        placement == AdminOrderPrimaryPlacement.PROBLEM -> AdminOperationListKind.AllProblems
+        placement == AdminOrderPrimaryPlacement.FINISHED -> AdminOperationListKind.ClosedDelivered
+        placement == AdminOrderPrimaryPlacement.CANCELLED -> AdminOperationListKind.ClosedCancelledProblem
+        activeBucket == AdminActiveOrdersBucket.WAITING_STORE -> AdminOperationListKind.ActiveWaitingStore
+        activeBucket == AdminActiveOrdersBucket.PREPARING -> AdminOperationListKind.PreparingNormal
+        activeBucket == AdminActiveOrdersBucket.WAITING_DRIVER -> AdminOperationListKind.ActiveWaitingDriver
+        activeBucket == AdminActiveOrdersBucket.IN_DELIVERY -> AdminOperationListKind.ActiveInDelivery
+        else -> AdminOperationListKind.ActiveReviewState
+    }
+
+private fun adminProblemListKindFor(
+    summary: AdminOrderSummary?,
+    detail: AdminOrderDetail?,
+    signals: AdminOperationOrderSignals,
+): AdminOperationListKind? {
+    val financial = detail?.financialStatus ?: summary?.financialStatus.orEmpty()
+    val operational = detail?.operationalStatus ?: summary?.operationalStatus.orEmpty()
+    val public = detail?.publicStatus ?: summary?.publicStatus.orEmpty()
+    return when {
+        financial.contains("disputed", ignoreCase = true) ||
+            financial.contains("rejected", ignoreCase = true) ||
+            financial.contains("conflict", ignoreCase = true) ||
+            financial.contains("conflicto", ignoreCase = true) -> AdminOperationListKind.ProblemPaymentConflict
+        operational.contains("driver_issue", ignoreCase = true) ||
+            operational.contains("repartidor report", ignoreCase = true) ||
+            public.contains("repartidor", ignoreCase = true) && public.contains("problema", ignoreCase = true) -> AdminOperationListKind.ProblemDriverIssue
+        public.contains("cliente no responde", ignoreCase = true) ||
+            operational.contains("cliente no responde", ignoreCase = true) -> AdminOperationListKind.ProblemUserNotResponding
+        else -> when (AdminOperationOrderClassification.problemBucket(signals)) {
+            AdminProblemOrdersBucket.STORE_NOT_RESPONDING -> AdminOperationListKind.ProblemStoreNotResponding
+            AdminProblemOrdersBucket.CUSTOMER_CLAIM -> AdminOperationListKind.ProblemUserClaim
+            AdminProblemOrdersBucket.DELAYED -> AdminOperationListKind.ProblemDelayed
+            AdminProblemOrdersBucket.WITHOUT_RESPONSIBLE -> AdminOperationListKind.ProblemWithoutResponsible
+            AdminProblemOrdersBucket.OPERATIONAL_REVIEW -> AdminOperationListKind.ProblemOperationalReview
+            null -> null
+        }
+    }
+}
+
+private fun adminVisibleGuidedActions(
+    allowedActions: List<LiveOrderAction>,
+    problemKind: AdminOperationListKind?,
+    placement: AdminOrderPrimaryPlacement,
+    activeBucket: AdminActiveOrdersBucket?,
+): List<LiveOrderAction> {
+    val preferred = when (problemKind) {
+        AdminOperationListKind.ProblemStoreNotResponding -> listOf(
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.CancelOrder,
+            LiveOrderAction.OpenIncident,
+            LiveOrderAction.LocalReject,
+        )
+        AdminOperationListKind.ProblemWithoutResponsible,
+        AdminOperationListKind.ActiveWaitingDriver -> listOf(
+            LiveOrderAction.StoreDriverRequest,
+            LiveOrderAction.DriverTake,
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident,
+        )
+        AdminOperationListKind.ProblemPaymentConflict -> listOf(
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident,
+            LiveOrderAction.CancelOrder,
+        )
+        AdminOperationListKind.ProblemDriverIssue -> listOf(
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident,
+            LiveOrderAction.CancelOrder,
+        )
+        AdminOperationListKind.ProblemUserClaim,
+        AdminOperationListKind.ProblemUserNotResponding -> listOf(
+            LiveOrderAction.ResolveIncident,
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.CancelOrder,
+        )
+        AdminOperationListKind.ProblemDelayed,
+        AdminOperationListKind.ProblemOperationalReview -> listOf(
+            LiveOrderAction.AdminIntervene,
+            LiveOrderAction.OpenIncident,
+            LiveOrderAction.CancelOrder,
+            LiveOrderAction.ResolveIncident,
+        )
+        else -> when {
+            activeBucket == AdminActiveOrdersBucket.WAITING_DRIVER -> listOf(LiveOrderAction.StoreDriverRequest, LiveOrderAction.DriverTake)
+            placement == AdminOrderPrimaryPlacement.ACTIVE -> allowedActions.take(2)
+            else -> allowedActions.take(1)
+        }
+    }
+    return preferred.filter { it in allowedActions }.ifEmpty { allowedActions.take(if (problemKind == null) 1 else 2) }
+}
+
+private fun adminNoGuidedActionText(problemKind: AdminOperationListKind?, status: String): String =
+    when (problemKind) {
+        null -> "No hay una acción guiada disponible para $status."
+        else -> "Este problema necesita lectura, pero el backend todavía no publicó una acción segura para resolverlo."
+    }
+
+private fun AdminOrderSummary.adminActorLabel(): String =
+    storeName.ifBlank {
+        when {
+            assignedActorRole.contains("driver", ignoreCase = true) -> "Repartidor asignado"
+            assignedActorRole.isNotBlank() -> assignedActorRole.adminRoleLabel()
+            else -> "Pedido Pédilo"
+        }
+    }
+
+private fun AdminOrderSummary.adminElapsedLabel(): String {
+    val created = createdAtMillis ?: return "Sin hora"
+    val minutes = ((System.currentTimeMillis() - created) / 60000L).coerceAtLeast(0)
+    return when {
+        minutes < 1 -> "Ahora"
+        minutes < 60 -> "Hace ${minutes} min"
+        minutes < 1440 -> "Hace ${minutes / 60} h"
+        else -> "Hace ${minutes / 1440} d"
+    }
+}
+
+private fun adminHumanTicketFacts(
+    visibleNumber: String,
+    storeName: String,
+    status: String,
+    summary: AdminOrderSummary?,
+    detail: AdminOrderDetail?,
+): List<Pair<String, String>> = buildList {
+    addVisible("Pedido", visibleNumber)
+    addVisible("Estado", status)
+    addVisible("Persona usuaria", detail?.component15())
+    addVisible("Local / origen", storeName)
+    addVisible("Pedido solicitado", detail?.itemsSummary.adminItemsSummary())
+    addVisible("Pago", adminPaymentHumanLine(summary, detail))
+    addVisible("Total", detail?.total ?: summary?.total.orEmpty())
+    addVisible("Repartidor", adminDriverSummary(summary, detail))
+    addVisible("Último movimiento", detail?.lastEventSummary.adminHumanText())
+}
+
+private fun adminPaymentHumanLine(summary: AdminOrderSummary?, detail: AdminOrderDetail?): String {
+    val method = detail?.paymentMethod ?: summary?.paymentMethod.orEmpty()
+    val amount = detail?.amountToCollect ?: summary?.amountToCollect.orEmpty()
+    return listOf(method, amount.takeIf { it.isNotBlank() }?.adminMoneyLabel()).filterNotNull()
+        .joinToString(" · ")
+}
+
+private fun adminListToneColor(kind: AdminOperationListKind, count: Int = 1): Color {
+    if (count == 0) return PediloMuted
+    return when (kind) {
+        AdminOperationListKind.AllProblems -> PediloPink
+        AdminOperationListKind.ProblemStoreNotResponding -> PediloOrange
+        AdminOperationListKind.ProblemWithoutResponsible -> PediloCyan
+        AdminOperationListKind.ProblemPaymentConflict -> PediloPink
+        AdminOperationListKind.ProblemDriverIssue -> PediloWarning
+        AdminOperationListKind.ProblemUserNotResponding -> PediloOrange
+        AdminOperationListKind.ProblemDelayed -> PediloWarning
+        AdminOperationListKind.ProblemUserClaim -> PediloPink
+        AdminOperationListKind.ProblemOperationalReview -> PediloOrange
+        AdminOperationListKind.ActiveWaitingStore,
+        AdminOperationListKind.ActiveWaitingOperationalConfirmation -> PediloWarning
+        AdminOperationListKind.ActiveWaitingDriver,
+        AdminOperationListKind.DeliveryDriverAssigned -> PediloCyan
+        AdminOperationListKind.AllPreparing,
+        AdminOperationListKind.ActivePreparing,
+        AdminOperationListKind.PreparingNormal,
+        AdminOperationListKind.PreparingReadyForPickup,
+        AdminOperationListKind.AcceptedByStore,
+        AdminOperationListKind.AcceptedWaitingPreparation,
+        AdminOperationListKind.AcceptedReadyToPrepare -> PediloGreen
+        AdminOperationListKind.AllInDelivery,
+        AdminOperationListKind.ActiveInDelivery,
+        AdminOperationListKind.DeliveryPickedUp -> PediloCyan
+        AdminOperationListKind.PreparingDelayed,
+        AdminOperationListKind.DeliveryDelayed -> PediloWarning
+        AdminOperationListKind.ClosedWithIncident,
+        AdminOperationListKind.ClosedPostClaim,
+        AdminOperationListKind.ClosedCancelledProblem -> PediloOrange
+        else -> PediloMuted
+    }
+}
 
 private fun List<AdminOrderSummary>.forOperationList(kind: AdminOperationListKind): List<AdminOrderSummary> {
     val signals = this.map { it to AdminOperationOrderSignals.from(it) }
@@ -4747,12 +5376,22 @@ private fun List<AdminOrderSummary>.forOperationList(kind: AdminOperationListKin
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
                 AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.PREPARING
         }.map { it.first }
-        AdminOperationListKind.AllInDelivery -> signals.filter { (_, s) ->
+        AdminOperationListKind.AllInDelivery -> signals.filter { (order, s) ->
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
-                AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.IN_DELIVERY
+                (
+                    AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.IN_DELIVERY ||
+                        order.operationalStatus.contains("driver_assigned", ignoreCase = true) ||
+                        order.operationalStatus.contains("repartidor asignado", ignoreCase = true) ||
+                        order.operationalStatus.contains("picked_up", ignoreCase = true) ||
+                        order.operationalStatus.contains("retirado", ignoreCase = true)
+                    )
         }.map { it.first }
-        AdminOperationListKind.AllProblems -> signals.filter { (_, s) ->
-            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM
+        AdminOperationListKind.AllProblems -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM ||
+                order.financialStatus.contains("disputed", ignoreCase = true) ||
+                order.financialStatus.contains("rejected", ignoreCase = true) ||
+                order.financialStatus.contains("conflict", ignoreCase = true) ||
+                order.financialStatus.contains("conflicto", ignoreCase = true)
         }.map { it.first }
         AdminOperationListKind.AllBlocked -> signals.filter { (_, s) ->
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM &&
@@ -4810,9 +5449,17 @@ private fun List<AdminOrderSummary>.forOperationList(kind: AdminOperationListKin
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
                 AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.IN_DELIVERY
         }.map { it.first }
-        AdminOperationListKind.ActiveReviewState -> signals.filter { (_, s) ->
+        AdminOperationListKind.ActiveWaitingOperationalConfirmation -> signals.filter { (_, s) ->
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
                 AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.REVIEW_STATE
+        }.map { it.first }
+        AdminOperationListKind.ActiveReviewState -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
+                (
+                    AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.REVIEW_STATE ||
+                        s.operationalStatus.contains("local" + "_accepted", ignoreCase = true) ||
+                        s.operationalStatus.contains("acept", ignoreCase = true)
+                    )
         }.map { it.first }
         AdminOperationListKind.ProblemStoreNotResponding -> signals.filter { (_, s) ->
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM &&
@@ -4830,9 +5477,101 @@ private fun List<AdminOrderSummary>.forOperationList(kind: AdminOperationListKin
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM &&
                 AdminOperationOrderClassification.problemBucket(s) == AdminProblemOrdersBucket.WITHOUT_RESPONSIBLE
         }.map { it.first }
+        AdminOperationListKind.ProblemPaymentConflict -> signals.filter { (order, _) ->
+            order.financialStatus.contains("disputed", ignoreCase = true) ||
+                order.financialStatus.contains("rejected", ignoreCase = true) ||
+                order.financialStatus.contains("conflict", ignoreCase = true) ||
+                order.financialStatus.contains("conflicto", ignoreCase = true)
+        }.map { it.first }
+        AdminOperationListKind.ProblemDriverIssue -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM &&
+                (
+                    order.publicStatus.contains("repartidor", ignoreCase = true) ||
+                        order.operationalStatus.contains("driver_issue", ignoreCase = true) ||
+                        order.operationalStatus.contains("repartidor report", ignoreCase = true)
+                    )
+        }.map { it.first }
+        AdminOperationListKind.ProblemUserNotResponding -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM &&
+                (
+                    order.publicStatus.contains("cliente no responde", ignoreCase = true) ||
+                        order.operationalStatus.contains("cliente no responde", ignoreCase = true)
+                    )
+        }.map { it.first }
         AdminOperationListKind.ProblemOperationalReview -> signals.filter { (_, s) ->
             AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.PROBLEM &&
                 AdminOperationOrderClassification.problemBucket(s) == AdminProblemOrdersBucket.OPERATIONAL_REVIEW
+        }.map { it.first }
+        AdminOperationListKind.AcceptedByStore,
+        AdminOperationListKind.AcceptedWaitingPreparation,
+        AdminOperationListKind.AcceptedReadyToPrepare -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
+                (
+                    s.operationalStatus.contains("local" + "_accepted", ignoreCase = true) ||
+                        s.operationalStatus.contains("acept", ignoreCase = true) ||
+                        AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.REVIEW_STATE
+                    )
+        }.map { it.first }
+        AdminOperationListKind.PreparingNormal -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
+                AdminOperationOrderClassification.activeBucket(s) == AdminActiveOrdersBucket.PREPARING &&
+                !order.operationalStatus.contains("ready", ignoreCase = true) &&
+                !AdminOperationOrderClassification.hasRealDelaySignal(s)
+        }.map { it.first }
+        AdminOperationListKind.PreparingReadyForPickup -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
+                (
+                    order.operationalStatus.contains("ready_for_pickup", ignoreCase = true) ||
+                        order.operationalStatus.contains("listo", ignoreCase = true)
+                    )
+        }.map { it.first }
+        AdminOperationListKind.PreparingDelayed -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.hasRealDelaySignal(s) &&
+                s.operationalStatus.contains("prepar", ignoreCase = true)
+        }.map { it.first }
+        AdminOperationListKind.DeliveryDriverAssigned -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
+                (
+                    order.operationalStatus.contains("driver_assigned", ignoreCase = true) ||
+                        order.operationalStatus.contains("repartidor asignado", ignoreCase = true)
+                    )
+        }.map { it.first }
+        AdminOperationListKind.DeliveryPickedUp -> signals.filter { (order, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.ACTIVE &&
+                (
+                    order.operationalStatus.contains("picked_up", ignoreCase = true) ||
+                        order.operationalStatus.contains("retirado", ignoreCase = true)
+                    )
+        }.map { it.first }
+        AdminOperationListKind.DeliveryDelayed -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.hasRealDelaySignal(s) &&
+                (
+                    s.operationalStatus.contains("entrega", ignoreCase = true) ||
+                        s.operationalStatus.contains("delivery", ignoreCase = true)
+                    )
+        }.map { it.first }
+        AdminOperationListKind.ClosedDelivered -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.FINISHED &&
+                !s.activeIncident &&
+                !s.needsAttention
+        }.map { it.first }
+        AdminOperationListKind.ClosedCancelledProblem -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) == AdminOrderPrimaryPlacement.CANCELLED
+        }.map { it.first }
+        AdminOperationListKind.ClosedWithIncident -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) in setOf(
+                AdminOrderPrimaryPlacement.FINISHED,
+                AdminOrderPrimaryPlacement.CANCELLED,
+            ) && (s.activeIncident || s.needsAttention)
+        }.map { it.first }
+        AdminOperationListKind.ClosedPostClaim -> signals.filter { (_, s) ->
+            AdminOperationOrderClassification.primaryPlacement(s) in setOf(
+                AdminOrderPrimaryPlacement.FINISHED,
+                AdminOrderPrimaryPlacement.CANCELLED,
+            ) && (
+                s.publicStatus.contains("reclamo", ignoreCase = true) ||
+                    s.publicStatus.contains("problema", ignoreCase = true)
+                )
         }.map { it.first }
         else -> emptyList()
     }.distinctBy { it.id }

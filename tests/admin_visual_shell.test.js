@@ -55,39 +55,43 @@ test("admin operation home exposes the new live card contract", () => {
   );
 
   [
-    "Home vivo",
+    "Pedidos vivos",
     "Admin Operación",
-    "Pedidos reales en operación",
-    "Operaciones",
-    "Buscar · filtrar · historial",
-    "Resolver ahora",
+    "Pedidos con problemas",
+    "En espera de aceptación",
+    "Aceptados",
+    "En preparación",
+    "En camino",
+    "Entregados / cerrados con problemas",
     "Ver más",
   ].forEach((label) => assert.match(source, new RegExp(label)));
 
   assert.match(desk, /adminLiveBranches\(orders\)/);
-  assert.match(desk, /AdminOperationOverviewBand\(orders\)/);
-  assert.match(desk, /AdminOperationsEntryCard/);
   assert.match(desk, /AdminLiveBranchCard/);
   assert.match(desk, /onOpenBranch/);
-  assert.match(desk, /onOpenOrder/);
-  assert.match(source, /verticalScroll\(rememberScrollState\(\)\)/);
-  assert.match(source, /height\(if \(branch\.rows\.size > 2\) 230\.dp else 150\.dp\)/);
+  assert.doesNotMatch(desk, /onOpenOrder/);
+  assert.doesNotMatch(desk, /AdminOperationsEntryCard/);
+  assert.match(source, /AdminMainBranchPreview/);
+  assert.match(source, /AdminSubBranchCard/);
 });
 
-test("ver mas uses OperationBranch and old hierarchy routes are gone", () => {
+test("ver mas opens branch then queue before order detail", () => {
   const source = readTree(adminDir);
   const appSource = read(admin);
 
   assert.match(source, /data class OperationBranch\(val list: AdminOperationList\) : AdminRoute/);
+  assert.match(source, /data class OperationQueue\(val list: AdminOperationList\) : AdminRoute/);
   assert.match(source, /AdminOperationBranchScreen/);
+  assert.match(source, /AdminOperationQueueScreen/);
   assert.match(source, /route = AdminRoute\.OperationBranch\(list\)/);
-  assert.match(source, /returnRoute = AdminRoute\.OperationBranch\(current\.list\)/);
+  assert.match(source, /route = AdminRoute\.OperationQueue\(queue\)/);
+  assert.match(source, /returnRoute = AdminRoute\.OperationQueue\(current\.list\)/);
   assert.match(source, /is AdminRoute\.OperationBranch -> AdminRoute\.Operation/);
-  assert.match(source, /Rama operativa/);
-  assert.match(source, /pedidos reales/);
-  assert.match(source, /AdminBranchGroupPanel/);
-  assert.match(source, /Debe actuar:/);
-  assert.match(source, /Resolución:/);
+  assert.match(source, /is AdminRoute\.OperationQueue -> AdminRoute\.OperationBranch/);
+  assert.match(source, /Cola de pedidos/);
+  assert.match(source, /Ver pedido/);
+  assert.match(source, /Abrir ficha/);
+  assert.match(source, /AdminQueueOrderCard/);
 
   assert.doesNotMatch(appSource, /data class OperationUniverse/);
   assert.doesNotMatch(appSource, /data class OperationView/);
@@ -108,47 +112,34 @@ test("order detail starts with situation action or read only and real backend ac
   );
 
   assert.match(detail, /AdminOrderCompactTimeline/);
-  assert.match(detail, /AdminMoreDataInline/);
   assert.match(detail, /AdminSecondaryActionRow\(title = "Volver"/);
 
-  assert.match(source, /Resumen para resolver/);
-  assert.match(source, /Resumen de consulta/);
-  assert.match(source, /Datos de la espera/);
+  assert.match(source, /Problema actual/);
+  assert.match(source, /Estado actual/);
+  assert.match(source, /Acciones guiadas/);
+  assert.match(source, /Ticket del pedido/);
   assert.match(source, /Historial reciente/);
-  assert.match(source, /Más información del pedido/);
-  assert.match(source, /Datos para revisar/);
-  assert.match(source, /AdminOrderHeroStage/);
+  assert.match(source, /AdminHumanSituationCard/);
+  assert.match(source, /AdminGuidedActionsPanel/);
+  assert.match(source, /AdminGuidedActionScreen/);
+  assert.match(source, /Canales disponibles/);
+  assert.match(source, /Sugerencias/);
+  assert.match(source, /Resultado/);
   assert.match(source, /AdminOrderDataSheet/);
-  assert.match(source, /AdminResponsibleRail/);
-  assert.match(source, /AdminSecondaryActionDock/);
   assert.match(source, /AdminOrderCompactTimeline/);
   assert.match(detail, /Column\(/);
   assert.match(detail, /verticalScroll\(rememberScrollState\(\)\)/);
-  assert.doesNotMatch(detail, /LazyColumn\(/);
+  assert.match(source, /AdminGuidedActionScreen[\s\S]*LazyColumn\(/);
   assert.doesNotMatch(detail, /AdminQueueHeader\(title = "Acciones secundarias"/);
-  assert.match(source, /enum class AdminOrderWorkMode/);
-  assert.match(source, /AdminOrderWorkMode\.Problem/);
-  assert.match(source, /AdminOrderWorkMode\.Closed/);
-  assert.match(source, /AdminOrderWorkMode\.Cancelled/);
-  assert.match(source, /AdminOrderWorkMode\.Waiting/);
-  assert.match(source, /AdminOrderWorkMode\.Preparing/);
-  assert.match(source, /AdminOrderWorkMode\.InTransit/);
-  assert.match(source, /Pedido \$number/);
-  assert.match(source, /Acción principal/);
-  assert.match(source, /AdminPassiveOrderNote/);
-  assert.match(source, /private fun adminOrderCurrentNeed/);
-  assert.match(source, /private fun adminOrderWorkPresentation/);
-  assert.match(source, /private fun adminUsefulSummaryFacts/);
-  assert.match(source, /private fun adminOrderPartFacts/);
   assert.match(detail, /allowedActions = detail\?\.nextAllowedActions \?: summary\?\.nextAllowedActions\.orEmpty\(\)/);
-  assert.match(detail, /primaryAction = allowedActions\.firstOrNull\(\)/);
-  assert.match(detail, /secondaryActions = allowedActions\.drop\(1\)/);
+  assert.match(detail, /adminVisibleGuidedActions/);
+  assert.match(detail, /visibleActions/);
   assert.match(source, /AdminLiveOrderActionRequest/);
   assert.match(source, /adminOrders\.executeLive/);
-  assert.match(source, /pending\.action\.adminActionLabel\(\)/);
-  assert.match(source, /label = "Motivo"/);
+  assert.match(source, /AdminGuidedResultPanel/);
+  assert.match(source, /Confirmar resultado/);
   assert.match(source, /adminOrders\.recalculateActions\(orderId\)/);
-  assert.doesNotMatch(detail, /Sin acción necesaria ahora|Revisá historial|Datos para decidir|No requerido ahora|Debe revisar|order_created|consultas|Datos secundarios|Más acciones|Acción o lectura|Solo lectura|Sin acciones disponibles|Volver a mesa|Actualizar acciones del pedido/);
+  assert.doesNotMatch(detail, /Sin acción necesaria ahora|Revisá historial|Datos para decidir|No requerido ahora|Debe revisar|order_created|consultas|Datos secundarios|Más acciones|Acción o lectura|Solo lectura|Sin acciones disponibles|Volver a mesa|Actualizar acciones del pedido|Rama operativa/);
   assert.doesNotMatch(source, /collection\("orders"\).*\.set|collection\("orders"\).*\.add|collection\("orders"\).*\.update|collection\("orders"\).*\.delete|runTransaction|writeBatch/s);
 });
 

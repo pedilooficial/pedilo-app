@@ -52,30 +52,20 @@ test("admin order detail shows backend allowed actions and safe empty action sta
   );
 
   assert.match(detail, /allowedActions = detail\?\.nextAllowedActions \?: summary\?\.nextAllowedActions\.orEmpty\(\)/);
-  assert.match(detail, /primaryAction = allowedActions\.firstOrNull\(\)/);
-  assert.match(detail, /secondaryActions = allowedActions\.drop\(1\)/);
-  assert.match(detail, /AdminMoreDataInline/);
-  assert.match(detail, /AdminOrderHeroStage/);
+  assert.match(detail, /adminVisibleGuidedActions/);
+  assert.match(detail, /visibleActions/);
+  assert.match(detail, /AdminHumanSituationCard/);
+  assert.match(detail, /AdminGuidedActionsPanel/);
   assert.match(detail, /AdminOrderDataSheet/);
-  assert.match(detail, /AdminResponsibleRail/);
-  assert.match(detail, /AdminSecondaryActionDock/);
   assert.match(detail, /AdminOrderCompactTimeline/);
   assert.match(detail, /verticalScroll\(rememberScrollState\(\)\)/);
-  assert.doesNotMatch(detail, /LazyColumn\(/);
-  assert.match(detail, /AdminOrderWorkMode\.Problem/);
-  assert.match(detail, /AdminOrderWorkMode\.Closed/);
-  assert.match(detail, /AdminOrderWorkMode\.Cancelled/);
-  assert.match(detail, /AdminOrderWorkMode\.Waiting/);
-  assert.match(detail, /AdminOrderWorkMode\.Preparing/);
-  assert.match(detail, /AdminOrderWorkMode\.InTransit/);
-  assert.match(ui, /Más información del pedido/);
-  assert.match(ui, /Resumen para resolver/);
-  assert.match(ui, /Resumen de consulta/);
-  assert.match(ui, /Datos de la espera/);
-  assert.match(ui, /AdminPassiveOrderNote/);
-  assert.match(detail, /adminNoActionReason/);
-  assert.match(ui, /no hay una acción disponible desde esta pantalla/i);
-  assert.doesNotMatch(detail, /Sin acción necesaria ahora|Revisá historial|Datos para decidir|No requerido ahora|Debe revisar|order_created|consultas|local_accept|driver_take|driver_mark_delivered|force_status|Datos secundarios|Volver a mesa|Actualizar acciones del pedido/);
+  assert.match(ui, /AdminGuidedActionScreen[\s\S]*LazyColumn\(/);
+  assert.match(ui, /Problema actual/);
+  assert.match(ui, /Acciones guiadas/);
+  assert.match(ui, /Ticket del pedido/);
+  assert.match(ui, /Canales disponibles/);
+  assert.match(ui, /Confirmar resultado/);
+  assert.doesNotMatch(detail, /Sin acción necesaria ahora|Revisá historial|Datos para decidir|No requerido ahora|Debe revisar|order_created|consultas|local_accept|driver_take|driver_mark_delivered|force_status|Datos secundarios|Volver a mesa|Actualizar acciones del pedido|Rama operativa|No aplica/);
 });
 
 test("admin configuration and role access are real persisted admin surfaces", () => {
