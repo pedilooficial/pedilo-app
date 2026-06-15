@@ -38,7 +38,7 @@ Pedilo es una app Android Compose con backend Firebase/Cloud Functions. El pedid
 
 - Usuario Publico activo y no modificado durante este saneamiento.
 - Backend/functions/reglas funcionales conservados.
-- Admin Operacion reconstruido como herramienta de trabajo por flujo humano.
+- Admin Operacion reconstruido como herramienta de trabajo por flujo humano, con prioridad visual, pulso operativo, sub-ramas, colas, ficha humana y acciones guiadas.
 - Tests/guards vigentes conservados y actualizados para impedir regreso de la UI vieja de Operacion.
 
 ## No aprobado
@@ -51,7 +51,7 @@ Pedilo es una app Android Compose con backend Firebase/Cloud Functions. El pedid
 
 ## Admin Operacion
 
-Admin Operacion quedo reconstruido desde cero alrededor de pedidos vivos y trabajo guiado. La primera pantalla muestra cards principales:
+Admin Operacion quedo reconstruido desde cero alrededor de pedidos vivos y trabajo guiado. La primera pantalla muestra siempre las seis cards principales y una banda de pulso operativo para leer bloqueos, esperas y entregas en curso:
 
 - Pedidos con problemas.
 - En espera de aceptacion.
@@ -60,7 +60,7 @@ Admin Operacion quedo reconstruido desde cero alrededor de pedidos vivos y traba
 - En camino.
 - Entregados / cerrados con problemas.
 
-Cada card abre una sub-rama con cards internas. Desde cada sub-rama se abre una cola/listado de pedidos. Cada pedido abre una ficha humana. La ficha abre acciones guiadas solo cuando corresponden al problema o estado del pedido.
+Cada card muestra cantidad, prioridad, resumen de sub-situaciones y resultado esperado. Cada card abre una sub-rama con cards internas. Desde cada sub-rama se abre una cola/listado de pedidos. Cada pedido abre una ficha humana. La ficha abre acciones guiadas solo cuando corresponden al problema o estado del pedido.
 
 ## Navegacion actual de Admin Operacion
 
@@ -83,7 +83,7 @@ La ficha de pedido muestra informacion humana:
 - Problema actual cuando existe.
 - Color propio del problema.
 - Acciones guiadas visibles solo para ese problema.
-- Ticket/resumen humano del pedido.
+- Ticket/resumen humano del pedido, incluyendo persona usuaria, telefono, local/origen, pedido solicitado, destino, pago, total y repartidor cuando esos datos existen.
 - Historial reciente humano.
 
 Las acciones no se muestran todas juntas. Cada problema expone solo opciones necesarias. Ejemplos vigentes:
@@ -92,7 +92,7 @@ Las acciones no se muestran todas juntas. Cada problema expone solo opciones nec
 - Sin repartidor: buscar repartidor o asignar manualmente.
 - Pago con conflicto: revisar pago o contactar persona usuaria.
 
-La pantalla guiada incluye canales, sugerencias, alternativas y resultado final. Al resolver, el pedido debe cambiar de estado/color/cola segun la respuesta real del backend y la recalculacion operativa.
+La pantalla guiada incluye objetivo, datos para resolver, canales, sugerencias, alternativas y resultado final. Al resolver, el pedido debe cambiar de estado/color/cola segun la respuesta real del backend y la recalculacion operativa. Las pantallas muestran continuidad visual de flujo: sub-rama, cola, ficha humana, accion guiada y resultado.
 
 ## Documentacion vieja eliminada
 

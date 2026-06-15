@@ -54,6 +54,8 @@ data class AdminOrderDetail(
     val requestType: String,
     val storeName: String,
     val customerName: String,
+    val customerPhone: String = "",
+    val customerAddress: String = "",
     val createdAtMillis: Long?,
     val updatedAtMillis: Long?,
     val total: String,

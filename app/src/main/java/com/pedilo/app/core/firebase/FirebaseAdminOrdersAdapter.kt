@@ -89,6 +89,8 @@ class FirebaseAdminOrdersAdapter(
                 requestType = doc.getString(REQUEST_TYPE).orEmpty(),
                 storeName = doc.getString(STORE_NAME).orEmpty(),
                 customerName = customer?.get(NAME).orEmptyText(),
+                customerPhone = customer?.get(PHONE).orEmptyText(),
+                customerAddress = customer?.get(ADDRESS).orEmptyText(),
                 createdAtMillis = (doc.get(CREATED_AT) as? Timestamp)?.toDate()?.time,
                 updatedAtMillis = (doc.get(UPDATED_AT) as? Timestamp)?.toDate()?.time,
                 total = doc.get(TOTAL)?.toString().orEmpty(),
@@ -560,6 +562,8 @@ class FirebaseAdminOrdersAdapter(
         const val ITEM_QTY = "quantity"
         const val CUSTOMER = "customer"
         const val NAME = "name"
+        const val PHONE = "phone"
+        const val ADDRESS = "address"
         const val ORDER_TYPE = "orderType"
         const val FINANCIAL_STATUS = "financialStatus"
         const val COMMUNICATION_STATUS = "communicationStatus"

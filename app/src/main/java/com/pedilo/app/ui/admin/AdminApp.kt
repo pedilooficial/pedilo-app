@@ -1597,6 +1597,13 @@ private fun AdminOperationBranchScreen(
             )
         }
         item {
+            AdminOperationPathStrip(
+                current = "Sub-rama",
+                next = "Segundo Ver más abre cola",
+                toneColor = toneColor,
+            )
+        }
+        item {
             AdminBranchIntentPanel(
                 title = list.title,
                 detail = list.summary,
@@ -1655,29 +1662,133 @@ private fun AdminOperationDeskScreen(
                 showSignOut = true,
             )
         }
-        if (branches.all { it.rows.isEmpty() }) {
-            item {
-                AdminOrderMomentPanel(
-                    title = "Operación al día",
-                    detail = "No hay pedidos para revisar ahora.",
-                    highlighted = false,
-                )
+        item {
+            AdminOperationPulseBand(branches = branches)
+        }
+        items(branches, key = { it.title }) { branch ->
+            AdminLiveBranchCard(
+                branch = branch,
+                orders = orders,
+                onMore = {
+                    onOpenBranch(AdminOperationList(
+                        title = branch.title,
+                        summary = branch.state,
+                        emptyText = "Sin pedidos",
+                        kind = branch.kind,
+                    ))
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun AdminOperationPulseBand(branches: List<AdminLiveBranch>) {
+    val problems = branches.firstOrNull { it.kind == AdminOperationListKind.AllProblems }?.rows?.size ?: 0
+    val waiting = branches.firstOrNull { it.kind == AdminOperationListKind.ActiveWaitingStore }?.rows?.size ?: 0
+    val moving = branches.firstOrNull { it.kind == AdminOperationListKind.AllInDelivery }?.rows?.size ?: 0
+    val toneColor = when {
+        problems > 0 -> PediloPink
+        waiting > 0 -> PediloWarning
+        moving > 0 -> PediloCyan
+        else -> PediloGreen
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.46f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.weight(1f)) {
+                Text("Pulso operativo", color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold)
+                Text(adminOperationPulseText(problems, waiting, moving), color = PediloText, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
             }
-        } else {
-            items(branches, key = { it.title }) { branch ->
-                AdminLiveBranchCard(
-                    branch = branch,
-                    orders = orders,
-                    onMore = {
-                        onOpenBranch(AdminOperationList(
-                            title = branch.title,
-                            summary = branch.state,
-                            emptyText = "Sin pedidos",
-                            kind = branch.kind,
-                        ))
-                    },
-                )
-            }
+            AdminStatusChip(adminOperationPriorityLabel(AdminOperationListKind.AllProblems, problems), toneColor)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AdminPulseMetric("Problemas", problems, PediloPink, Modifier.weight(1f))
+            AdminPulseMetric("Esperan", waiting, PediloWarning, Modifier.weight(1f))
+            AdminPulseMetric("En camino", moving, PediloCyan, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun AdminPulseMetric(
+    label: String,
+    value: Int,
+    toneColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloPanel.copy(alpha = 0.72f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(value.toString(), color = toneColor, fontSize = 21.sp, lineHeight = 24.sp, fontWeight = FontWeight.ExtraBold)
+        Text(label, color = PediloMuted, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun AdminOperationPathStrip(
+    current: String,
+    next: String,
+    toneColor: Color,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloPanel.copy(alpha = 0.70f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AdminStatusChip(current, toneColor)
+        Text(next, color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun AdminQueueFocusPanel(
+    list: AdminOperationList,
+    count: Int,
+    toneColor: Color,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.40f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(PediloPanel.copy(alpha = 0.74f), RoundedCornerShape(8.dp))
+                .border(1.dp, toneColor.copy(alpha = 0.32f), RoundedCornerShape(8.dp))
+                .size(46.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(count.toString(), color = toneColor, fontSize = 22.sp, lineHeight = 25.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(adminOperationPriorityLabel(list.kind, count), color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold)
+            Text(list.summary, color = PediloText, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
+            Text(adminOperationOutcomeText(list.kind), color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -1726,11 +1837,21 @@ private fun AdminLiveBranchCard(
         AdminOperationList(branch.title, branch.state, "Sin pedidos", branch.kind),
         orders,
     )
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(PediloPanel, RoundedCornerShape(8.dp))
-            .border(1.dp, toneColor.copy(alpha = 0.48f), RoundedCornerShape(8.dp))
+            .scale(if (pressed) 0.992f else 1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(toneColor.copy(alpha = if (pressed) 0.18f else 0.12f), PediloPanelSoft, PediloPanel),
+                ),
+                RoundedCornerShape(8.dp),
+            )
+            .border(1.dp, toneColor.copy(alpha = if (pressed) 0.74f else 0.48f), RoundedCornerShape(8.dp))
+            .clickable(interactionSource = interactionSource, indication = null, role = Role.Button, onClick = onMore)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1757,12 +1878,15 @@ private fun AdminLiveBranchCard(
                     }
                 }
             }
-            Text(branch.rows.size.toString(), color = toneColor, fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold)
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(branch.rows.size.toString(), color = toneColor, fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold)
+                AdminStatusChip(adminOperationPriorityLabel(branch.kind, branch.rows.size), toneColor)
+            }
         }
         if (branch.rows.isEmpty()) {
                 AdminOrderMomentPanel(
                     title = "Sin pedidos",
-                    detail = "Nada para atender acá.",
+                    detail = adminOperationEmptyText(branch.kind),
                     highlighted = false,
                 )
         } else {
@@ -1777,12 +1901,36 @@ private fun AdminLiveBranchCard(
                 }
             }
         }
+        AdminBranchOutcomeRow(
+            kind = branch.kind,
+            toneColor = toneColor,
+        )
         AdminInlineActionButton(
             title = "Ver más",
-            subtitle = branch.title,
+            subtitle = "Abrir sub-rama",
             toneColor = toneColor,
             onClick = onMore,
         )
+    }
+}
+
+@Composable
+private fun AdminBranchOutcomeRow(
+    kind: AdminOperationListKind,
+    toneColor: Color,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloBg.copy(alpha = 0.34f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Después de resolver", color = PediloMuted, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
+        Text(adminOperationOutcomeText(kind), color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1804,6 +1952,7 @@ private fun AdminMainBranchPreview(group: AdminBranchGroup) {
         }
         val sample = group.rows.take(2).joinToString(" · ") { it.label }
         Text(sample.ifBlank { group.waitingFor }, color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(group.resolution, color = toneColor, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1813,11 +1962,16 @@ private fun AdminSubBranchCard(
     onMore: () -> Unit,
 ) {
     val toneColor = adminListToneColor(group.kind, group.rows.size)
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(PediloPanel, RoundedCornerShape(8.dp))
-            .border(1.dp, toneColor.copy(alpha = 0.48f), RoundedCornerShape(8.dp))
+            .scale(if (pressed) 0.992f else 1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (pressed) toneColor.copy(alpha = 0.14f) else PediloPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = if (pressed) 0.74f else 0.48f), RoundedCornerShape(8.dp))
+            .clickable(interactionSource = interactionSource, indication = null, role = Role.Button, onClick = onMore)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
@@ -1830,15 +1984,41 @@ private fun AdminSubBranchCard(
                 Text(group.title, color = PediloText, fontSize = 19.sp, lineHeight = 23.sp, fontWeight = FontWeight.ExtraBold)
                 Text(group.waitingFor, color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold)
             }
-            Text("${group.rows.size}", color = toneColor, fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold)
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("${group.rows.size}", color = toneColor, fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold)
+                AdminStatusChip(adminOperationPriorityLabel(group.kind, group.rows.size), toneColor)
+            }
         }
-        Text(group.resolution, color = PediloText, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AdminMiniOperationFact("Actúa", group.actionBy, toneColor, Modifier.weight(1f))
+            AdminMiniOperationFact("Se resuelve con", group.resolution, toneColor, Modifier.weight(1f))
+        }
         AdminInlineActionButton(
             title = "Ver más",
             subtitle = "Abrir cola",
             toneColor = toneColor,
             onClick = onMore,
         )
+    }
+}
+
+@Composable
+private fun AdminMiniOperationFact(
+    label: String,
+    value: String,
+    toneColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+            .padding(9.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(label, color = toneColor, fontSize = 10.sp, lineHeight = 13.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(value, color = PediloText, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1869,6 +2049,16 @@ private fun AdminOperationQueueScreen(
                 showSignOut = false,
             )
         }
+        item {
+            AdminOperationPathStrip(
+                current = "Cola",
+                next = "Ver pedido abre ficha humana",
+                toneColor = toneColor,
+            )
+        }
+        item {
+            AdminQueueFocusPanel(list = list, count = rows.size, toneColor = toneColor)
+        }
         if (rows.isEmpty()) {
             item {
                 AdminOrderMomentPanel(
@@ -1891,29 +2081,44 @@ private fun AdminQueueOrderCard(
     toneColor: Color,
     onClick: () -> Unit,
 ) {
-    Column(
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(PediloPanel, RoundedCornerShape(8.dp))
-            .border(1.dp, toneColor.copy(alpha = 0.42f), RoundedCornerShape(8.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .scale(if (pressed) 0.992f else 1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (pressed) toneColor.copy(alpha = 0.12f) else PediloPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = if (pressed) 0.74f else 0.42f), RoundedCornerShape(8.dp))
+            .clickable(interactionSource = interactionSource, indication = null, role = Role.Button, onClick = onClick)
+            .padding(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(row.label, color = PediloText, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
-                Text(row.order.adminActorLabel(), color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            AdminStatusChip(row.order.adminElapsedLabel(), toneColor)
-        }
-        Text(row.reason, color = toneColor, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.ExtraBold)
-        Text(row.nextStep, color = PediloText, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
-        AdminInlineActionButton(
-            title = "Ver pedido",
-            subtitle = "Abrir ficha",
-            toneColor = toneColor,
-            onClick = onClick,
+        Box(
+            modifier = Modifier
+                .width(5.dp)
+                .height(112.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(toneColor, RoundedCornerShape(8.dp)),
         )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(row.label, color = PediloText, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
+                    Text(row.order.adminActorLabel(), color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                AdminStatusChip(row.order.adminElapsedLabel(), toneColor)
+            }
+            Text(row.reason, color = toneColor, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.ExtraBold)
+            Text(row.nextStep, color = PediloText, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                AdminStatusChip(row.status, toneColor)
+                Text("Ver pedido · Abrir ficha", color = PediloText, fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+            }
+        }
     }
 }
 
@@ -3016,6 +3221,7 @@ private fun AdminOrderDetailScreen(
             number = visibleNumber,
             status = statusText,
             origin = navigationOrigin,
+            problem = problemFocus?.first,
             toneColor = toneColor,
             onBack = onBackToDesk,
         )
@@ -3037,17 +3243,28 @@ private fun AdminOrderDetailScreen(
             status = statusText,
             problem = problemFocus,
             problemKind = problemKind,
+            operator = adminProblemOperatorLabel(problemKind, activeBucket, placement),
+            afterResolve = adminOperationOutcomeText(problemKind ?: adminKindForPlacement(placement, activeBucket)),
             toneColor = toneColor,
             detailLoaded = detail != null,
         )
-        AdminGuidedActionsPanel(
-            actions = visibleActions,
-            problemKind = problemKind,
-            status = statusText,
-            expectedVersion = expectedVersion,
-            toneColor = toneColor,
-            onLiveAction = onLiveAction,
-        )
+        if (visibleActions.isNotEmpty()) {
+            AdminGuidedActionsPanel(
+                actions = visibleActions,
+                problemKind = problemKind,
+                status = statusText,
+                expectedVersion = expectedVersion,
+                toneColor = toneColor,
+                onLiveAction = onLiveAction,
+            )
+        } else {
+            AdminOrderMomentPanel(
+                title = "Sin acción guiada ahora",
+                detail = adminNoGuidedActionText(problemKind, statusText),
+                highlighted = false,
+                eyebrow = "Lectura operativa",
+            )
+        }
         AdminOrderDataSheet(title = "Ticket del pedido", facts = ticketFacts)
         AdminOrderCompactTimeline(events = detail?.events.orEmpty())
         AdminSecondaryActionRow(title = "Volver", note = navigationOrigin, onClick = onBackToDesk)
@@ -3060,6 +3277,7 @@ private fun AdminHumanDetailHeader(
     number: String,
     status: String,
     origin: String,
+    problem: String?,
     toneColor: Color,
     onBack: () -> Unit,
 ) {
@@ -3085,8 +3303,13 @@ private fun AdminHumanDetailHeader(
                 Text(number, color = PediloText, fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.ExtraBold)
                 Text(origin, color = PediloMuted, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold)
             }
-            AdminStatusChip(status, toneColor)
+            AdminStatusChip(problem ?: status, toneColor)
         }
+        AdminOperationPathStrip(
+            current = "Ficha humana",
+            next = if (problem != null) "Acción guiada si corresponde" else "Seguimiento del pedido",
+            toneColor = toneColor,
+        )
     }
 }
 
@@ -3095,6 +3318,8 @@ private fun AdminHumanSituationCard(
     status: String,
     problem: Pair<String, String>?,
     problemKind: AdminOperationListKind?,
+    operator: String,
+    afterResolve: String,
     toneColor: Color,
     detailLoaded: Boolean,
 ) {
@@ -3116,6 +3341,10 @@ private fun AdminHumanSituationCard(
         Text(if (problemKind != null) "Problema actual" else "Estado actual", color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold)
         Text(title, color = PediloText, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.ExtraBold)
         Text(detail, color = PediloText, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AdminMiniOperationFact("Actúa", operator, toneColor, Modifier.weight(1f))
+            AdminMiniOperationFact("Al resolver", afterResolve, toneColor, Modifier.weight(1f))
+        }
     }
 }
 
@@ -3207,6 +3436,13 @@ private fun AdminGuidedActionScreen(
                 showSignOut = false,
             )
         }
+        item {
+            AdminOperationPathStrip(
+                current = "Acción guiada",
+                next = "Confirmar resultado actualiza cola",
+                toneColor = toneColor,
+            )
+        }
         if (operationMessage.isNotBlank()) {
             item {
                 AdminOrderResultStrip(
@@ -3259,13 +3495,19 @@ private fun AdminGuidedActionPanel(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(toneColor.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
-            .border(1.dp, toneColor.copy(alpha = 0.46f), RoundedCornerShape(8.dp))
+            .background(
+                Brush.linearGradient(listOf(toneColor.copy(alpha = 0.14f), PediloPanelSoft, PediloPanel)),
+                RoundedCornerShape(8.dp),
+            )
+            .border(1.dp, toneColor.copy(alpha = 0.52f), RoundedCornerShape(8.dp))
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(action.adminGuidedObjective(problemKind), color = PediloText, fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Pedido: $visibleNumber", color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            AdminStatusChip(visibleNumber, toneColor)
+            Text(action.adminGuidedActionSubtitle(problemKind), color = PediloMuted, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        }
         AdminOrderDataSheet(
             title = "Datos para resolver",
             facts = adminHumanTicketFacts(visibleNumber, detail?.storeName ?: summary?.storeName.orEmpty(), "", summary, detail).take(5),
@@ -3933,12 +4175,14 @@ private fun AdminOrderResultStrip(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(PediloGreen.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-            .border(1.dp, PediloGreen.copy(alpha = 0.42f), RoundedCornerShape(8.dp))
-            .padding(13.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+            .background(Brush.linearGradient(listOf(PediloGreen.copy(alpha = 0.18f), PediloPanelSoft, PediloPanel)), RoundedCornerShape(8.dp))
+            .border(1.dp, PediloGreen.copy(alpha = 0.52f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(message, color = PediloText, fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.ExtraBold)
+        AdminStatusChip("Resultado aplicado", PediloGreen)
+        Text(message, color = PediloText, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
+        Text("La cola se actualiza con la próxima lectura publicada por backend.", color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             AdminCompactTextAction("Cola", onBackToBranch, Modifier.weight(1f))
             AdminCompactTextAction("Operación", onBackToHome, Modifier.weight(1f))
@@ -4348,10 +4592,12 @@ private fun adminHumanTicketFacts(
     addVisible("Pedido", visibleNumber)
     addVisible("Estado", status)
     addVisible("Persona usuaria", detail?.component15())
+    addVisible("Teléfono", detail?.component16())
     addVisible("Local / origen", storeName)
     addVisible("Pedido solicitado", detail?.itemsSummary.adminItemsSummary())
+    addVisible("Destino", detail?.component17())
     addVisible("Pago", adminPaymentHumanLine(summary, detail))
-    addVisible("Total", detail?.total ?: summary?.total.orEmpty())
+    addVisible("Total", adminMoneyOrBlank(detail?.total ?: summary?.total))
     addVisible("Repartidor", adminDriverSummary(summary, detail))
     addVisible("Último movimiento", detail?.lastEventSummary.adminHumanText())
 }
@@ -4359,9 +4605,114 @@ private fun adminHumanTicketFacts(
 private fun adminPaymentHumanLine(summary: AdminOrderSummary?, detail: AdminOrderDetail?): String {
     val method = detail?.paymentMethod ?: summary?.paymentMethod.orEmpty()
     val amount = detail?.amountToCollect ?: summary?.amountToCollect.orEmpty()
-    return listOf(method, amount.takeIf { it.isNotBlank() }?.adminMoneyLabel()).filterNotNull()
+    return listOf(adminPaymentMethodLabel(method), amount.takeIf { it.isNotBlank() }?.adminMoneyLabel()).filterNotNull()
         .joinToString(" · ")
 }
+
+private fun adminMoneyOrBlank(value: String?): String =
+    value?.takeIf { it.isNotBlank() }?.adminMoneyLabel().orEmpty()
+
+private fun adminOperationPulseText(problems: Int, waiting: Int, moving: Int): String =
+    when {
+        problems > 0 -> "$problems pedidos necesitan intervención ahora"
+        waiting > 0 -> "$waiting pedidos esperan respuesta inicial"
+        moving > 0 -> "$moving pedidos se están moviendo"
+        else -> "Operación sin bloqueos visibles"
+    }
+
+private fun adminOperationPriorityLabel(kind: AdminOperationListKind, count: Int): String =
+    when {
+        count == 0 -> "sin casos"
+        kind in setOf(
+            AdminOperationListKind.AllProblems,
+            AdminOperationListKind.ProblemStoreNotResponding,
+            AdminOperationListKind.ProblemPaymentConflict,
+            AdminOperationListKind.ProblemDriverIssue,
+            AdminOperationListKind.ProblemDelayed,
+            AdminOperationListKind.ProblemOperationalReview,
+        ) -> "prioridad alta"
+        kind in setOf(
+            AdminOperationListKind.ActiveWaitingStore,
+            AdminOperationListKind.ActiveWaitingOperationalConfirmation,
+            AdminOperationListKind.ActiveWaitingDriver,
+            AdminOperationListKind.ProblemWithoutResponsible,
+            AdminOperationListKind.ProblemUserNotResponding,
+            AdminOperationListKind.ProblemUserClaim,
+            AdminOperationListKind.PreparingDelayed,
+            AdminOperationListKind.DeliveryDelayed,
+        ) -> "revisar pronto"
+        else -> "seguimiento"
+    }
+
+private fun adminOperationOutcomeText(kind: AdminOperationListKind): String =
+    when (kind) {
+        AdminOperationListKind.AllProblems,
+        AdminOperationListKind.ProblemStoreNotResponding -> "vuelve a preparación o cierre"
+        AdminOperationListKind.ProblemWithoutResponsible,
+        AdminOperationListKind.ActiveWaitingDriver -> "pasa a reparto asignado"
+        AdminOperationListKind.ProblemPaymentConflict -> "pasa a seguir o queda bloqueado"
+        AdminOperationListKind.ProblemDriverIssue -> "sigue entrega o se reasigna"
+        AdminOperationListKind.ProblemUserNotResponding,
+        AdminOperationListKind.ProblemUserClaim -> "queda respondido o en seguimiento"
+        AdminOperationListKind.ProblemDelayed,
+        AdminOperationListKind.PreparingDelayed,
+        AdminOperationListKind.DeliveryDelayed -> "baja demora o escala incidencia"
+        AdminOperationListKind.ActiveWaitingStore,
+        AdminOperationListKind.ActiveWaitingOperationalConfirmation -> "pasa a aceptados"
+        AdminOperationListKind.ActiveReviewState,
+        AdminOperationListKind.AcceptedByStore,
+        AdminOperationListKind.AcceptedWaitingPreparation,
+        AdminOperationListKind.AcceptedReadyToPrepare -> "pasa a preparación"
+        AdminOperationListKind.AllPreparing,
+        AdminOperationListKind.ActivePreparing,
+        AdminOperationListKind.PreparingNormal,
+        AdminOperationListKind.PreparingReadyForPickup -> "pasa a retiro o entrega"
+        AdminOperationListKind.AllInDelivery,
+        AdminOperationListKind.ActiveInDelivery,
+        AdminOperationListKind.DeliveryDriverAssigned,
+        AdminOperationListKind.DeliveryPickedUp -> "pasa a entregado"
+        AdminOperationListKind.AllClosed,
+        AdminOperationListKind.ClosedDelivered,
+        AdminOperationListKind.ClosedCancelledProblem,
+        AdminOperationListKind.ClosedWithIncident,
+        AdminOperationListKind.ClosedPostClaim -> "queda para lectura final"
+        else -> "vuelve a la cola correcta"
+    }
+
+private fun adminOperationEmptyText(kind: AdminOperationListKind): String =
+    when (kind) {
+        AdminOperationListKind.AllProblems -> "No hay bloqueos operativos visibles."
+        AdminOperationListKind.ActiveWaitingStore -> "No hay locales esperando aceptación."
+        AdminOperationListKind.ActiveReviewState -> "No hay aceptados pendientes de avance."
+        AdminOperationListKind.AllPreparing -> "No hay pedidos en preparación."
+        AdminOperationListKind.AllInDelivery -> "No hay entregas en curso."
+        AdminOperationListKind.AllClosed -> "No hay cierres para revisar."
+        else -> "Nada para atender acá."
+    }
+
+private fun adminProblemOperatorLabel(
+    problemKind: AdminOperationListKind?,
+    activeBucket: AdminActiveOrdersBucket?,
+    placement: AdminOrderPrimaryPlacement,
+): String =
+    when (problemKind) {
+        AdminOperationListKind.ProblemStoreNotResponding -> "Admin y local"
+        AdminOperationListKind.ProblemWithoutResponsible -> "Admin y reparto"
+        AdminOperationListKind.ProblemPaymentConflict -> "Admin y persona usuaria"
+        AdminOperationListKind.ProblemDriverIssue -> "Admin y repartidor"
+        AdminOperationListKind.ProblemUserNotResponding,
+        AdminOperationListKind.ProblemUserClaim -> "Admin y persona usuaria"
+        AdminOperationListKind.ProblemDelayed,
+        AdminOperationListKind.ProblemOperationalReview -> "Admin"
+        else -> when {
+            activeBucket == AdminActiveOrdersBucket.WAITING_STORE -> "Local"
+            activeBucket == AdminActiveOrdersBucket.PREPARING -> "Local"
+            activeBucket == AdminActiveOrdersBucket.WAITING_DRIVER -> "Admin y reparto"
+            activeBucket == AdminActiveOrdersBucket.IN_DELIVERY -> "Repartidor"
+            placement == AdminOrderPrimaryPlacement.FINISHED || placement == AdminOrderPrimaryPlacement.CANCELLED -> "Consulta"
+            else -> "Admin"
+        }
+    }
 
 private fun adminListToneColor(kind: AdminOperationListKind, count: Int = 1): Color {
     if (count == 0) return PediloMuted
