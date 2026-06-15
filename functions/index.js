@@ -1247,20 +1247,25 @@ exports.adminUpdateConfig = onCall({region: REGION}, async (request) => {
   const actor = await requireAdminActor(request);
   const field = cleanText(request.data && request.data.field);
   const enabled = request.data && request.data.enabled;
-  const allowed = ["maintenanceMode", "rainMode", "saturationMode", "emergencyMode", "publicOrderingEnabled"];
+  const amount = request.data && request.data.amount;
+  const booleanFields = ["rainMode"];
+  const amountFields = ["rainDeliveryFee", "baseDeliveryFee", "distanceSurcharge"];
+  const isBooleanUpdate = booleanFields.includes(field) && typeof enabled === "boolean";
+  const isAmountUpdate = amountFields.includes(field) && Number.isInteger(amount) && amount >= 0 && amount <= 999999;
 
-  if (!allowed.includes(field) || typeof enabled !== "boolean") {
+  if (!isBooleanUpdate && !isAmountUpdate) {
     throw new HttpsError("invalid-argument", "Elegí una configuración válida.");
   }
 
   const configRef = db.collection("admin_config").doc("real_use");
   const auditRef = configRef.collection("events").doc();
   const now = admin.firestore.FieldValue.serverTimestamp();
+  const nextValue = isBooleanUpdate ? enabled : amount;
 
   await db.runTransaction(async (tx) => {
     const current = await tx.get(configRef);
     tx.set(configRef, {
-      [field]: enabled,
+      [field]: nextValue,
       updatedAt: now,
       updatedBy: actor.uid,
       lastUpdatedBy: actor.uid,
@@ -1270,14 +1275,14 @@ exports.adminUpdateConfig = onCall({region: REGION}, async (request) => {
       actorUid: actor.uid,
       actorRole: actor.role,
       field,
-      previousValue: current.exists ? current.get(field) === true : null,
-      nextValue: enabled,
-      summary: "Admin actualizó configuración operativa.",
+      previousValue: current.exists ? current.get(field) : null,
+      nextValue,
+      summary: "Admin actualizó configuración.",
       createdAt: now,
     });
   });
 
-  return {field, enabled, message: "Configuración actualizada y auditada."};
+  return {field, enabled: isBooleanUpdate ? enabled : null, amount: isAmountUpdate ? amount : null, message: "Configuración actualizada y auditada."};
 });
 
 exports.getAdminConfig = onCall({region: REGION}, async (request) => {
@@ -1289,11 +1294,10 @@ exports.getAdminConfig = onCall({region: REGION}, async (request) => {
     const current = await tx.get(configRef);
     if (current.exists) return;
     tx.set(configRef, {
-      maintenanceMode: false,
       rainMode: false,
-      saturationMode: false,
-      emergencyMode: false,
-      publicOrderingEnabled: true,
+      rainDeliveryFee: 4000,
+      baseDeliveryFee: 3500,
+      distanceSurcharge: 1500,
       updatedAt: now,
       updatedBy: actor.uid,
       lastUpdatedBy: actor.uid,
@@ -1311,11 +1315,10 @@ exports.getAdminConfig = onCall({region: REGION}, async (request) => {
   const snap = await configRef.get();
   return {
     id: snap.id,
-    maintenanceMode: snap.get("maintenanceMode") === true,
     rainMode: snap.get("rainMode") === true,
-    saturationMode: snap.get("saturationMode") === true,
-    emergencyMode: snap.get("emergencyMode") === true,
-    publicOrderingEnabled: snap.get("publicOrderingEnabled") !== false,
+    rainDeliveryFee: Number.isInteger(snap.get("rainDeliveryFee")) ? snap.get("rainDeliveryFee") : 4000,
+    baseDeliveryFee: Number.isInteger(snap.get("baseDeliveryFee")) ? snap.get("baseDeliveryFee") : 3500,
+    distanceSurcharge: Number.isInteger(snap.get("distanceSurcharge")) ? snap.get("distanceSurcharge") : 1500,
     lastUpdatedBy: cleanText(snap.get("lastUpdatedBy") || snap.get("updatedBy")),
   };
 });

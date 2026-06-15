@@ -189,18 +189,18 @@ data class AdminTeamUser(
 
 data class AdminConfigState(
     val id: String = "real_use",
-    val maintenanceMode: Boolean = false,
     val rainMode: Boolean = false,
-    val saturationMode: Boolean = false,
-    val emergencyMode: Boolean = false,
-    val publicOrderingEnabled: Boolean = true,
+    val rainDeliveryFee: Int = 4000,
+    val baseDeliveryFee: Int = 3500,
+    val distanceSurcharge: Int = 1500,
     val lastUpdatedBy: String = "",
     val updatedAtMillis: Long? = null,
 )
 
 data class AdminConfigUpdateRequest(
     val field: String,
-    val enabled: Boolean,
+    val enabled: Boolean? = null,
+    val amount: Int? = null,
 )
 
 data class AdminRoleUpdateRequest(

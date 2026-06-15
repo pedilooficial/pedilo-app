@@ -320,11 +320,10 @@ class FirebaseAdminOrdersAdapter(
     private fun com.google.firebase.firestore.DocumentSnapshot.toAdminConfig(): AdminConfigState =
         AdminConfigState(
             id = id,
-            maintenanceMode = getBoolean(MAINTENANCE_MODE) ?: false,
             rainMode = getBoolean(RAIN_MODE) ?: false,
-            saturationMode = getBoolean(SATURATION_MODE) ?: false,
-            emergencyMode = getBoolean(EMERGENCY_MODE) ?: false,
-            publicOrderingEnabled = getBoolean(PUBLIC_ORDERING_ENABLED) ?: true,
+            rainDeliveryFee = (get(RAIN_DELIVERY_FEE) as? Number)?.toInt() ?: DEFAULT_RAIN_DELIVERY_FEE,
+            baseDeliveryFee = (get(BASE_DELIVERY_FEE) as? Number)?.toInt() ?: DEFAULT_BASE_DELIVERY_FEE,
+            distanceSurcharge = (get(DISTANCE_SURCHARGE) as? Number)?.toInt() ?: DEFAULT_DISTANCE_SURCHARGE,
             lastUpdatedBy = getString(LAST_UPDATED_BY).orEmpty().ifBlank { getString(UPDATED_BY).orEmpty() },
             updatedAtMillis = (get(UPDATED_AT) as? Timestamp)?.toDate()?.time,
         )
@@ -343,11 +342,10 @@ class FirebaseAdminOrdersAdapter(
     private fun Map<String, Any?>.toAdminConfigState(): AdminConfigState =
         AdminConfigState(
             id = this["id"].asText().ifBlank { ADMIN_CONFIG_REAL_USE },
-            maintenanceMode = this[MAINTENANCE_MODE].asBoolValue(),
             rainMode = this[RAIN_MODE].asBoolValue(),
-            saturationMode = this[SATURATION_MODE].asBoolValue(),
-            emergencyMode = this[EMERGENCY_MODE].asBoolValue(),
-            publicOrderingEnabled = this[PUBLIC_ORDERING_ENABLED].asBoolValue(true),
+            rainDeliveryFee = this[RAIN_DELIVERY_FEE].asIntValue(DEFAULT_RAIN_DELIVERY_FEE),
+            baseDeliveryFee = this[BASE_DELIVERY_FEE].asIntValue(DEFAULT_BASE_DELIVERY_FEE),
+            distanceSurcharge = this[DISTANCE_SURCHARGE].asIntValue(DEFAULT_DISTANCE_SURCHARGE),
             lastUpdatedBy = this[LAST_UPDATED_BY].asText().ifBlank { this[UPDATED_BY].asText() },
         )
 
@@ -386,11 +384,12 @@ class FirebaseAdminOrdersAdapter(
         mapOf(
             "field" to field,
             "enabled" to enabled,
+            "amount" to amount,
         )
 
     private fun Any?.asText(): String = this as? String ?: ""
 
-    private fun Any?.asIntValue(): Int = (this as? Number)?.toInt() ?: 0
+    private fun Any?.asIntValue(default: Int = 0): Int = (this as? Number)?.toInt() ?: default
 
     private fun Any?.asBoolValue(default: Boolean = false): Boolean = this as? Boolean ?: default
 
@@ -514,14 +513,15 @@ class FirebaseAdminOrdersAdapter(
         const val ACTIVE = "active"
         const val STORE_ID = "storeId"
         const val DRIVER_ID = "driverId"
-        const val MAINTENANCE_MODE = "maintenanceMode"
         const val RAIN_MODE = "rainMode"
-        const val SATURATION_MODE = "saturationMode"
-        const val EMERGENCY_MODE = "emergencyMode"
-        const val PUBLIC_ORDERING_ENABLED = "publicOrderingEnabled"
+        const val RAIN_DELIVERY_FEE = "rainDeliveryFee"
+        const val BASE_DELIVERY_FEE = "baseDeliveryFee"
+        const val DISTANCE_SURCHARGE = "distanceSurcharge"
+        const val DEFAULT_RAIN_DELIVERY_FEE = 4000
+        const val DEFAULT_BASE_DELIVERY_FEE = 3500
+        const val DEFAULT_DISTANCE_SURCHARGE = 1500
         const val LAST_UPDATED_BY = "lastUpdatedBy"
         const val UPDATED_BY = "updatedBy"
-        val ADMIN_CONFIG_FIELDS = setOf(MAINTENANCE_MODE, RAIN_MODE, SATURATION_MODE, EMERGENCY_MODE, PUBLIC_ORDERING_ENABLED)
         const val OPERATE_LIVE_ORDER = "operateLiveOrder"
         const val ADMIN_RECALCULATE_ORDER_ACTIONS = "adminRecalculateOrderActions"
         const val GET_OPERATIONAL_HEALTH = "getOperationalHealth"

@@ -75,7 +75,15 @@ test("admin configuration and role access are real persisted admin surfaces", ()
 
   assert.match(ui, /AdminRealConfigurationScreen/);
   assert.match(ui, /AdminRealRoleAccessScreen/);
-  assert.match(ui, /Controles de operación/);
+  assert.match(ui, /AdminConfigurationPresentationCard/);
+  assert.match(ui, /AdminShippingFeeScreen/);
+  assert.match(ui, /AdminRainModeScreen/);
+  assert.match(ui, /"Tarifa\\nenvío"/);
+  assert.match(ui, /"Costo de envío"/);
+  assert.match(ui, /"Adicional por distancia"/);
+  assert.match(ui, /rainDeliveryFee/);
+  assert.match(ui, /baseDeliveryFee/);
+  assert.match(ui, /distanceSurcharge/);
   assert.match(ui, /Usuarios, roles y accesos/);
   assert.match(ui, /Activar acceso/);
   assert.match(adapter, /observeAdminConfig/);
