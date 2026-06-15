@@ -51,7 +51,7 @@ test("admin operation home exposes the new live card contract", () => {
   const desk = sliceBetween(
     source,
     "private fun AdminOperationDeskScreen",
-    "private fun AdminOperationOverviewBand",
+    "private fun AdminBranchIntentPanel",
   );
 
   [
@@ -143,33 +143,16 @@ test("order detail starts with situation action or read only and real backend ac
   assert.doesNotMatch(source, /collection\("orders"\).*\.set|collection\("orders"\).*\.add|collection\("orders"\).*\.update|collection\("orders"\).*\.delete|runTransaction|writeBatch/s);
 });
 
-test("operations is separate search filter history and opens the same detail", () => {
+test("operation no longer exposes the old archive search workspace", () => {
   const source = read(admin);
-  const operations = sliceBetween(
-    source,
-    "private fun AdminOperationsArchiveScreen",
-    "private fun AdminFilterChip",
-  );
 
-  [
-    "Operaciones",
-    "Historial de pedidos",
-    "Buscar pedido, local o repartidor",
-    "Todos",
-    "Hoy",
-    "Vivos",
-    "Problemas",
-    "Cerrados",
-    "Búsqueda activa",
-  ].forEach((label) => assert.match(operations, new RegExp(label)));
-
-  assert.match(operations, /query by remember/);
-  assert.match(operations, /filter by remember/);
-  assert.match(operations, /AdminFilterChip/);
-  assert.match(operations, /AdminDeskOrderCard/);
-  assert.match(source, /AdminRoute\.OperationsArchive -> AdminOperationsArchiveScreen/);
-  assert.match(source, /returnRoute = AdminRoute\.OperationsArchive/);
-  assert.match(source, /AdminRoute\.OperationsArchive -> AdminRoute\.Operation/);
+  assert.doesNotMatch(source, /AdminOperationsArchiveScreen/);
+  assert.doesNotMatch(source, /AdminFilterChip/);
+  assert.doesNotMatch(source, /AdminDeskOrderCard/);
+  assert.doesNotMatch(source, /AdminRoute\.OperationsArchive/);
+  assert.match(source, /AdminOperationBranchScreen/);
+  assert.match(source, /AdminOperationQueueScreen/);
+  assert.match(source, /AdminGuidedActionScreen/);
 });
 
 test("admin bottom navigation remains separated from public navigation", () => {
