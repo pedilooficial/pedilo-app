@@ -63,7 +63,7 @@ test("admin operation home exposes the new live card contract", () => {
     "En preparación",
     "En camino",
     "Entregados / cerrados con problemas",
-    "Ver más",
+    "Ver grupos",
   ].forEach((label) => assert.match(source, new RegExp(label)));
 
   assert.match(desk, /adminLiveBranches\(orders\)/);
@@ -75,7 +75,7 @@ test("admin operation home exposes the new live card contract", () => {
   assert.match(source, /AdminSubBranchCard/);
 });
 
-test("ver mas opens branch then queue before order detail", () => {
+test("human operation navigation opens groups then pedidos before order detail", () => {
   const source = readTree(adminDir);
   const appSource = read(admin);
 
@@ -88,7 +88,8 @@ test("ver mas opens branch then queue before order detail", () => {
   assert.match(source, /returnRoute = AdminRoute\.OperationQueue\(current\.list\)/);
   assert.match(source, /is AdminRoute\.OperationBranch -> AdminRoute\.Operation/);
   assert.match(source, /is AdminRoute\.OperationQueue -> AdminRoute\.OperationBranch/);
-  assert.match(source, /Cola de pedidos/);
+  assert.match(source, /Ver grupos/);
+  assert.match(source, /Ver pedidos/);
   assert.match(source, /Ver pedido/);
   assert.match(source, /Abrir ficha/);
   assert.match(source, /AdminQueueOrderCard/);
@@ -116,13 +117,13 @@ test("order detail starts with situation action or read only and real backend ac
 
   assert.match(source, /Problema actual/);
   assert.match(source, /Estado actual/);
-  assert.match(source, /Acciones guiadas/);
+  assert.match(source, /Resolver ahora/);
   assert.match(source, /Ticket del pedido/);
   assert.match(source, /Historial reciente/);
   assert.match(source, /AdminHumanSituationCard/);
   assert.match(source, /AdminGuidedActionsPanel/);
   assert.match(source, /AdminGuidedActionScreen/);
-  assert.match(source, /Canales disponibles/);
+  assert.match(source, /Canales/);
   assert.match(source, /Sugerencias/);
   assert.match(source, /Resultado/);
   assert.match(source, /AdminOrderDataSheet/);

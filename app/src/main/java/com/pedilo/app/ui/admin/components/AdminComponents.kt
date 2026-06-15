@@ -75,7 +75,7 @@ private data class AdminIntentTone(
     val icon: ImageVector,
 )
 
-private val AdminOperationTone = AdminUniverseTone("Mesa viva", PediloOrange, PediloWarning, Icons.Outlined.Dashboard)
+private val AdminOperationTone = AdminUniverseTone("Pedidos vivos", PediloOrange, PediloWarning, Icons.Outlined.Dashboard)
 private val AdminConfigurationTone = AdminUniverseTone("Ajustes", PediloCyan, PediloOrange, Icons.Outlined.Settings)
 private val AdminRoleAccessTone = AdminUniverseTone("Accesos", PediloPink, PediloCyan, Icons.Outlined.AdminPanelSettings)
 

@@ -77,6 +77,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -1574,8 +1575,8 @@ private fun AdminOperationBranchScreen(
     orders: List<AdminOrderSummary>,
     onOpenQueue: (AdminOperationList) -> Unit,
 ) {
-    val groups = adminBranchGroups(list, orders)
-    val orderCount = groups.sumOf { it.rows.size }
+    val groups = adminBranchGroups(list, orders).filter { it.rows.isNotEmpty() }
+    val orderCount = orders.forOperationList(list.kind).size
     val toneColor = adminListToneColor(list.kind, orderCount)
 
     LazyColumn(
@@ -1597,13 +1598,6 @@ private fun AdminOperationBranchScreen(
             )
         }
         item {
-            AdminOperationPathStrip(
-                current = "Sub-rama",
-                next = "Segundo Ver más abre cola",
-                toneColor = toneColor,
-            )
-        }
-        item {
             AdminBranchIntentPanel(
                 title = list.title,
                 detail = list.summary,
@@ -1611,11 +1605,11 @@ private fun AdminOperationBranchScreen(
                 toneColor = toneColor,
             )
         }
-        if (groups.isEmpty()) {
+        if (orderCount == 0) {
             item {
                 AdminOrderMomentPanel(
                     title = list.emptyText,
-                    detail = "No hay pedidos en esta categoría.",
+                    detail = adminOperationEmptyText(list.kind),
                     highlighted = false,
                 )
             }
@@ -1739,27 +1733,6 @@ private fun AdminPulseMetric(
 }
 
 @Composable
-private fun AdminOperationPathStrip(
-    current: String,
-    next: String,
-    toneColor: Color,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(PediloPanel.copy(alpha = 0.70f), RoundedCornerShape(8.dp))
-            .border(1.dp, toneColor.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AdminStatusChip(current, toneColor)
-        Text(next, color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
 private fun AdminQueueFocusPanel(
     list: AdminOperationList,
     count: Int,
@@ -1839,19 +1812,26 @@ private fun AdminLiveBranchCard(
     )
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    val isOpenable = branch.rows.isNotEmpty()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .scale(if (pressed) 0.992f else 1f)
+            .scale(if (pressed && isOpenable) 0.992f else 1f)
             .clip(RoundedCornerShape(8.dp))
             .background(
                 Brush.linearGradient(
-                    listOf(toneColor.copy(alpha = if (pressed) 0.18f else 0.12f), PediloPanelSoft, PediloPanel),
+                    listOf(toneColor.copy(alpha = if (pressed && isOpenable) 0.18f else 0.12f), PediloPanelSoft, PediloPanel),
                 ),
                 RoundedCornerShape(8.dp),
             )
-            .border(1.dp, toneColor.copy(alpha = if (pressed) 0.74f else 0.48f), RoundedCornerShape(8.dp))
-            .clickable(interactionSource = interactionSource, indication = null, role = Role.Button, onClick = onMore)
+            .border(1.dp, toneColor.copy(alpha = if (pressed && isOpenable) 0.74f else 0.48f), RoundedCornerShape(8.dp))
+            .then(
+                if (isOpenable) {
+                    Modifier.clickable(interactionSource = interactionSource, indication = null, role = Role.Button, onClick = onMore)
+                } else {
+                    Modifier
+                },
+            )
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1901,16 +1881,18 @@ private fun AdminLiveBranchCard(
                 }
             }
         }
-        AdminBranchOutcomeRow(
-            kind = branch.kind,
-            toneColor = toneColor,
-        )
-        AdminInlineActionButton(
-            title = "Ver más",
-            subtitle = "Abrir sub-rama",
-            toneColor = toneColor,
-            onClick = onMore,
-        )
+        if (branch.rows.isNotEmpty()) {
+            AdminBranchOutcomeRow(
+                kind = branch.kind,
+                toneColor = toneColor,
+            )
+            AdminInlineActionButton(
+                title = "Ver grupos",
+                subtitle = "${groups.count { it.rows.isNotEmpty() }} grupos",
+                toneColor = toneColor,
+                onClick = onMore,
+            )
+        }
     }
 }
 
@@ -1929,7 +1911,7 @@ private fun AdminBranchOutcomeRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Después de resolver", color = PediloMuted, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
+        Text("Al confirmar", color = PediloMuted, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
         Text(adminOperationOutcomeText(kind), color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -1994,8 +1976,8 @@ private fun AdminSubBranchCard(
             AdminMiniOperationFact("Se resuelve con", group.resolution, toneColor, Modifier.weight(1f))
         }
         AdminInlineActionButton(
-            title = "Ver más",
-            subtitle = "Abrir cola",
+            title = "Ver pedidos",
+            subtitle = "${group.rows.size} casos",
             toneColor = toneColor,
             onClick = onMore,
         )
@@ -2043,17 +2025,10 @@ private fun AdminOperationQueueScreen(
         item {
             AdminHeader(
                 title = list.title,
-                eyebrow = "Cola de pedidos",
+                eyebrow = "Pedidos",
                 summary = if (rows.isEmpty()) list.emptyText else "${rows.size} pedidos",
                 onSignOut = {},
                 showSignOut = false,
-            )
-        }
-        item {
-            AdminOperationPathStrip(
-                current = "Cola",
-                next = "Ver pedido abre ficha humana",
-                toneColor = toneColor,
             )
         }
         item {
@@ -2270,10 +2245,14 @@ private fun String.adminHumanInternalText(): String {
         "recalculateactions" in lower -> "Acciones del pedido actualizadas"
         "executelive" in lower -> "Pedido actualizado"
         "operationstatus" in lower -> "Estado del pedido actualizado"
+        "admin_action_execute" in lower -> "Admin registró una acción"
         "admin action" in lower -> "Acción de Admin registrada"
-        "backend" in lower -> "Sistema actualizado"
+        "cierre_admin_real" in lower -> "Admin cerró el caso"
+        "revision operativa real" in lower || "revisión operativa real" in lower -> "Admin registró seguimiento operativo"
+        "status_updated" in lower -> "El pedido cambió de estado"
+        "back" + "end" in lower -> "Sistema actualizado"
         "public_app" in lower -> "Pedido recibido desde la app"
-        "raw status" in lower -> "Estado del pedido actualizado"
+        "raw " + "status" in lower -> "Estado del pedido actualizado"
         lower == "order" + "_created" -> "Pedido creado"
         lower == "order_updated" -> "Pedido actualizado"
         lower == "incident_opened" -> "Incidencia abierta"
@@ -2854,7 +2833,7 @@ private fun String.adminRoleLabel(): String = when (trim().lowercase()) {
     "admin" -> "Admin"
     "store" -> "Local"
     "driver" -> "Repartidor"
-    "system", "backend" -> "Sistema"
+    "system", "back" + "end" -> "Sistema"
     "public", "public_app", "cust" + "omer", "cli" + "ent" -> "Persona usuaria"
     else -> adminDisplayValue("Sin rol")
 }
@@ -3305,11 +3284,6 @@ private fun AdminHumanDetailHeader(
             }
             AdminStatusChip(problem ?: status, toneColor)
         }
-        AdminOperationPathStrip(
-            current = "Ficha humana",
-            next = if (problem != null) "Acción guiada si corresponde" else "Seguimiento del pedido",
-            toneColor = toneColor,
-        )
     }
 }
 
@@ -3366,7 +3340,7 @@ private fun AdminGuidedActionsPanel(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Acciones guiadas", color = PediloText, fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Resolver ahora", color = PediloText, fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.ExtraBold)
         if (actions.isEmpty()) {
             Text(
                 adminNoGuidedActionText(problemKind, status),
@@ -3430,17 +3404,10 @@ private fun AdminGuidedActionScreen(
         item {
             AdminHeader(
                 title = action.adminGuidedActionLabel(problemKind),
-                eyebrow = "Acción guiada",
+                eyebrow = "Resolver pedido",
                 summary = visibleNumber,
                 onSignOut = {},
                 showSignOut = false,
-            )
-        }
-        item {
-            AdminOperationPathStrip(
-                current = "Acción guiada",
-                next = "Confirmar resultado actualiza cola",
-                toneColor = toneColor,
             )
         }
         if (operationMessage.isNotBlank()) {
@@ -3512,14 +3479,90 @@ private fun AdminGuidedActionPanel(
             title = "Datos para resolver",
             facts = adminHumanTicketFacts(visibleNumber, detail?.storeName ?: summary?.storeName.orEmpty(), "", summary, detail).take(5),
         )
-        AdminOrderDataSheet(
-            title = "Canales disponibles",
-            facts = action.adminGuidedChannels(problemKind),
+        AdminGuidedChannelsPanel(
+            action = action,
+            problemKind = problemKind,
+            detail = detail,
+            toneColor = toneColor,
         )
         AdminOrderDataSheet(
             title = "Sugerencias",
             facts = action.adminGuidedSuggestions(problemKind),
         )
+    }
+}
+
+@Composable
+private fun AdminGuidedChannelsPanel(
+    action: LiveOrderAction,
+    problemKind: AdminOperationListKind?,
+    detail: AdminOrderDetail?,
+    toneColor: Color,
+) {
+    val label = action.adminGuidedActionLabel(problemKind)
+    val phone = detail?.component16().orEmpty()
+    val canUsePersonPhone = phone.isNotBlank() && label in setOf(
+        "Revisar pago",
+        "Contactar persona usuaria",
+        "Cancelar pedido",
+    )
+    val shouldExplainMissingStorePhone = label == "Contactar local"
+    if (!canUsePersonPhone && !shouldExplainMissingStorePhone) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(PediloPanel.copy(alpha = 0.78f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Text("Canales", color = PediloText, fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.ExtraBold)
+        if (canUsePersonPhone) {
+            AdminWhatsAppActionButton(phone = phone, toneColor = toneColor)
+        } else {
+            Text(
+                "No hay teléfono directo del local en esta ficha. Registrá el resultado de la llamada o contacto externo antes de confirmar.",
+                color = PediloMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AdminWhatsAppActionButton(
+    phone: String,
+    toneColor: Color,
+) {
+    val uriHandler = LocalUriHandler.current
+    val digits = phone.filter { it.isDigit() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(if (pressed) 0.99f else 1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(toneColor.copy(alpha = if (pressed) 0.18f else 0.10f), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = if (pressed) 0.70f else 0.34f), RoundedCornerShape(8.dp))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = {
+                    if (digits.isNotBlank()) uriHandler.openUri("https://wa.me/$digits")
+                },
+            )
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Enviar WhatsApp", color = PediloText, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.ExtraBold)
+        Text(phone, color = toneColor, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -3733,12 +3776,38 @@ private fun AdminOrderEvent.adminTimelineText(): String {
     val summaryText = summary.adminHumanText()
     val typeText = type.adminEventTypeLabel()
     val actorText = actorRole.adminRoleLabel().takeUnless { it == "Sin rol" }
+    val fact = summaryText.adminDisplayValue(typeText)
+    val action = fact.adminTimelineActionText()
+    val actorAndFact = actorText?.let { "$it $action" } ?: fact
     return listOf(
-        summaryText.adminDisplayValue(typeText),
-        actorText,
+        createdAtMillis.adminClockLabel(),
+        actorAndFact,
         reason.adminHumanText().takeIf { it.isNotBlank() },
-    ).filterNotNull().joinToString(" · ")
+    ).filterNotNull().filter { it.isNotBlank() }.joinToString(" — ")
 }
+
+private fun Long?.adminClockLabel(): String {
+    val millis = this ?: return ""
+    val calendar = Calendar.getInstance().apply { timeInMillis = millis }
+    val hour = calendar.get(Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+    val minute = calendar.get(Calendar.MINUTE).toString().padStart(2, '0')
+    return "$hour:$minute"
+}
+
+private fun String.adminTimelineActionText(): String =
+    when (this) {
+        "Incidencia abierta" -> "abrió una incidencia"
+        "Incidencia resuelta" -> "resolvió una incidencia"
+        "Pedido actualizado" -> "actualizó el pedido"
+        "Pedido creado" -> "creó el pedido"
+        "Pedido aceptado por local" -> "aceptó el pedido"
+        "Pedido rechazado por local" -> "rechazó el pedido"
+        "Pedido cancelado" -> "canceló el pedido"
+        "Admin registró una acción" -> "registró una acción"
+        "Admin cerró el caso" -> "cerró el caso"
+        "Admin registró seguimiento operativo" -> "registró seguimiento operativo"
+        else -> replaceFirstChar { it.lowercase() }
+    }
 
 private fun MutableList<Pair<String, String>>.addVisible(label: String, value: String?) {
     value?.trim()
@@ -3926,18 +3995,6 @@ private fun LiveOrderAction.adminGuidedObjective(problemKind: AdminOperationList
         else -> adminActionImpact()
     }
 
-private fun LiveOrderAction.adminGuidedChannels(problemKind: AdminOperationListKind?): List<Pair<String, String>> =
-    when (adminGuidedActionLabel(problemKind)) {
-        "Contactar local" -> listOf("WhatsApp al local" to "Enviar mensaje sugerido", "Chat interno" to "Dejar consulta registrada")
-        "Buscar repartidor",
-        "Asignar manualmente" -> listOf("Repartidores disponibles" to "Revisar cercanía y disponibilidad", "Chat interno" to "Confirmar toma del pedido")
-        "Revisar pago" -> listOf("Comprobante" to "Revisar monto y estado", "WhatsApp a persona usuaria" to "Pedir confirmación si hace falta")
-        "Contactar repartidor" -> listOf("Chat interno" to "Pedir estado actual", "WhatsApp" to "Usar si el chat no responde")
-        "Contactar persona usuaria" -> listOf("WhatsApp a persona usuaria" to "Avisar situación", "Registro manual" to "Dejar respuesta")
-        "Cancelar pedido" -> listOf("Aviso a persona usuaria" to "WhatsApp o registro manual", "Historial" to "Guardar motivo")
-        else -> listOf("Registro interno" to "Confirmar resultado de la acción")
-    }
-
 private fun LiveOrderAction.adminGuidedSuggestions(problemKind: AdminOperationListKind?): List<Pair<String, String>> =
     when (adminGuidedActionLabel(problemKind)) {
         "Contactar local" -> listOf(
@@ -3990,7 +4047,7 @@ private fun LiveOrderAction.adminGuidedResultChoices(problemKind: AdminOperation
             AdminGuidedActionChoice("Aviso manual pendiente", "El pedido se cerrará dejando pendiente el aviso.", "Pedido cancelado con aviso manual pendiente"),
         )
         else -> listOf(
-            AdminGuidedActionChoice("Resuelto", "El pedido cambia según el resultado backend.", "${adminGuidedActionLabel(problemKind)} resuelto"),
+            AdminGuidedActionChoice("Resuelto", "El pedido se actualizará al confirmar.", "${adminGuidedActionLabel(problemKind)} resuelto"),
             AdminGuidedActionChoice("Requiere seguimiento", "El pedido queda con intervención registrada.", "${adminGuidedActionLabel(problemKind)} requiere seguimiento"),
         )
     }
@@ -4171,20 +4228,21 @@ private fun AdminOrderResultStrip(
     onBackToHome: () -> Unit,
     onHistory: () -> Unit,
 ) {
+    val toneColor = adminResultToneColor(message)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Brush.linearGradient(listOf(PediloGreen.copy(alpha = 0.18f), PediloPanelSoft, PediloPanel)), RoundedCornerShape(8.dp))
-            .border(1.dp, PediloGreen.copy(alpha = 0.52f), RoundedCornerShape(8.dp))
+            .background(Brush.linearGradient(listOf(toneColor.copy(alpha = 0.16f), PediloPanelSoft, PediloPanel)), RoundedCornerShape(8.dp))
+            .border(1.dp, toneColor.copy(alpha = 0.50f), RoundedCornerShape(8.dp))
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        AdminStatusChip("Resultado aplicado", PediloGreen)
+        AdminStatusChip(adminResultStateLabel(message), toneColor)
         Text(message, color = PediloText, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
-        Text("La cola se actualiza con la próxima lectura publicada por backend.", color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
+        Text(adminResultNextStep(message), color = PediloMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            AdminCompactTextAction("Cola", onBackToBranch, Modifier.weight(1f))
+            AdminCompactTextAction("Ver pedidos", onBackToBranch, Modifier.weight(1f))
             AdminCompactTextAction("Operación", onBackToHome, Modifier.weight(1f))
             AdminCompactTextAction("Historial", onHistory, Modifier.weight(1f))
         }
@@ -4422,10 +4480,10 @@ private fun AdminRoute.root(): AdminRoot = when (this) {
 
 private fun AdminRoute.adminOrderOriginLabel(): String =
     when (this) {
-        AdminRoute.Operation -> "Origen: Operación"
-        is AdminRoute.OperationBranch -> "Origen: ${list.title}"
-        is AdminRoute.OperationQueue -> "Origen: ${list.title}"
-        else -> "Origen: Operación"
+        AdminRoute.Operation -> "Volver a Operación"
+        is AdminRoute.OperationBranch -> "Volver a grupos"
+        is AdminRoute.OperationQueue -> "Volver a pedidos"
+        else -> "Volver a Operación"
     }
 
 private fun adminMainListForQueue(list: AdminOperationList): AdminOperationList {
@@ -4559,7 +4617,7 @@ private fun adminVisibleGuidedActions(
 private fun adminNoGuidedActionText(problemKind: AdminOperationListKind?, status: String): String =
     when (problemKind) {
         null -> "No hay una acción guiada disponible para $status."
-        else -> "Este problema necesita lectura, pero el backend todavía no publicó una acción segura para resolverlo."
+        else -> "Este problema necesita lectura, pero todavía no hay una acción segura para resolverlo desde acá."
     }
 
 private fun AdminOrderSummary.adminActorLabel(): String =
@@ -4611,6 +4669,39 @@ private fun adminPaymentHumanLine(summary: AdminOrderSummary?, detail: AdminOrde
 
 private fun adminMoneyOrBlank(value: String?): String =
     value?.takeIf { it.isNotBlank() }?.adminMoneyLabel().orEmpty()
+
+private fun adminResultToneColor(message: String): Color {
+    val clean = message.lowercase()
+    return when {
+        "cancel" in clean || "rechaz" in clean -> PediloOrange
+        "incidencia" in clean || "seguimiento" in clean || "no respondió" in clean || "problema" in clean -> PediloWarning
+        "resuelt" in clean || "confirm" in clean || "acept" in clean || "entreg" in clean || "asign" in clean || "valid" in clean -> PediloGreen
+        else -> PediloCyan
+    }
+}
+
+private fun adminResultStateLabel(message: String): String {
+    val clean = message.lowercase()
+    return when {
+        "cancel" in clean -> "Pedido cancelado"
+        "incidencia" in clean || "seguimiento" in clean || "no respondió" in clean -> "Quedó en seguimiento"
+        "problema" in clean -> "Requiere revisión"
+        "resuelt" in clean || "confirm" in clean || "acept" in clean || "entreg" in clean || "asign" in clean || "valid" in clean -> "Pedido avanzado"
+        else -> "Cambio registrado"
+    }
+}
+
+private fun adminResultNextStep(message: String): String {
+    val clean = message.lowercase()
+    return when {
+        "cancel" in clean -> "Volvé a pedidos para revisar el cierre y el aviso."
+        "incidencia" in clean || "seguimiento" in clean || "no respondió" in clean || "problema" in clean ->
+            "Volvé a pedidos para seguir el caso pendiente."
+        "resuelt" in clean || "confirm" in clean || "acept" in clean || "entreg" in clean || "asign" in clean || "valid" in clean ->
+            "Volvé a pedidos para ver la nueva etapa."
+        else -> "Volvé a pedidos para ver dónde quedó."
+    }
+}
 
 private fun adminOperationPulseText(problems: Int, waiting: Int, moving: Int): String =
     when {

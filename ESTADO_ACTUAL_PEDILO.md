@@ -38,7 +38,7 @@ Pedilo es una app Android Compose con backend Firebase/Cloud Functions. El pedid
 
 - Usuario Publico activo y no modificado durante este saneamiento.
 - Backend/functions/reglas funcionales conservados.
-- Admin Operacion reconstruido como herramienta de trabajo por flujo humano, con prioridad visual, pulso operativo, sub-ramas, colas, ficha humana y acciones guiadas.
+- Admin Operacion reconstruido como herramienta de trabajo por flujo humano, con prioridad visual, pulso operativo, grupos, pedidos, ficha humana y resolución guiada.
 - Tests/guards vigentes conservados y actualizados para impedir regreso de la UI vieja de Operacion.
 
 ## No aprobado
@@ -60,29 +60,29 @@ Admin Operacion quedo reconstruido desde cero alrededor de pedidos vivos y traba
 - En camino.
 - Entregados / cerrados con problemas.
 
-Cada card muestra cantidad, prioridad, resumen de sub-situaciones y resultado esperado. Cada card abre una sub-rama con cards internas. Desde cada sub-rama se abre una cola/listado de pedidos. Cada pedido abre una ficha humana. La ficha abre acciones guiadas solo cuando corresponden al problema o estado del pedido.
+Cada card muestra cantidad, prioridad, resumen de situaciones y resultado esperado. Las cards con casos abren grupos internos; los grupos con casos abren pedidos. Las cards vacías no invitan a navegar. Cada pedido abre una ficha humana y la ficha abre una resolución guiada solo cuando corresponde al problema o estado del pedido.
 
 ## Navegacion actual de Admin Operacion
 
 1. Admin -> Operacion.
-2. Card principal con `Ver mas`.
-3. Sub-rama con cards internas y segundo `Ver mas`.
-4. Cola de pedidos.
+2. Card principal con `Ver grupos` cuando hay casos.
+3. Grupo interno con `Ver pedidos`.
+4. Pedidos del grupo.
 5. Ficha humana del pedido.
-6. Accion guiada si corresponde.
+6. Resolución guiada si corresponde.
 7. Resultado.
-8. Regreso a la cola/rama actualizada.
+8. Regreso a pedidos u Operacion para ver la etapa actualizada.
 
 La ruta vieja de archivo operativo fue eliminada. No existe `OperationsArchive` como destino activo.
 
 ## Detalle y acciones guiadas
 
-La ficha de pedido muestra informacion humana:
+La ficha de pedido muestra informacion humana sin explicar arquitectura interna:
 
 - Estado actual entendible.
 - Problema actual cuando existe.
 - Color propio del problema.
-- Acciones guiadas visibles solo para ese problema.
+- Acciones de resolución visibles solo para ese problema.
 - Ticket/resumen humano del pedido, incluyendo persona usuaria, telefono, local/origen, pedido solicitado, destino, pago, total y repartidor cuando esos datos existen.
 - Historial reciente humano.
 
@@ -92,7 +92,7 @@ Las acciones no se muestran todas juntas. Cada problema expone solo opciones nec
 - Sin repartidor: buscar repartidor o asignar manualmente.
 - Pago con conflicto: revisar pago o contactar persona usuaria.
 
-La pantalla guiada incluye objetivo, datos para resolver, canales, sugerencias, alternativas y resultado final. Al resolver, el pedido debe cambiar de estado/color/cola segun la respuesta real del backend y la recalculacion operativa. Las pantallas muestran continuidad visual de flujo: sub-rama, cola, ficha humana, accion guiada y resultado.
+La pantalla de resolución incluye objetivo, datos para resolver, canales reales cuando existen, sugerencias, alternativas y resultado final. WhatsApp se muestra como acción cuando hay teléfono disponible. Al resolver, el pedido debe cambiar de estado/color/lista segun la respuesta real y la recalculacion operativa. Las pantallas muestran continuidad humana de flujo: grupos, pedidos, ficha, resolución y resultado.
 
 ## Documentacion vieja eliminada
 

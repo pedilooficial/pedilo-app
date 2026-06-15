@@ -61,9 +61,10 @@ test("admin order detail shows backend allowed actions and safe empty action sta
   assert.match(detail, /verticalScroll\(rememberScrollState\(\)\)/);
   assert.match(ui, /AdminGuidedActionScreen[\s\S]*LazyColumn\(/);
   assert.match(ui, /Problema actual/);
-  assert.match(ui, /Acciones guiadas/);
+  assert.match(ui, /Resolver ahora/);
   assert.match(ui, /Ticket del pedido/);
-  assert.match(ui, /Canales disponibles/);
+  assert.match(ui, /Canales/);
+  assert.match(ui, /AdminWhatsAppActionButton/);
   assert.match(ui, /Confirmar resultado/);
   assert.doesNotMatch(detail, /Sin acción necesaria ahora|Revisá historial|Datos para decidir|No requerido ahora|Debe revisar|order_created|consultas|local_accept|driver_take|driver_mark_delivered|force_status|Datos secundarios|Volver a mesa|Actualizar acciones del pedido|Rama operativa|No aplica/);
 });
