@@ -92,6 +92,16 @@ test("admin configuration and role access are real persisted admin surfaces", ()
   assert.match(adapter, /updateTeamUser/);
   assert.match(adapter, /db\.collection\(USERS\)/);
   assert.match(adapter, /db\.collection\(ADMIN_CONFIG\)/);
+  assert.match(ui, /withAppliedConfigUpdate/);
+  assert.match(ui, /toLongOrNull\(\)/);
+  assert.doesNotMatch(ui, /take\(6\)/);
+  assert.match(adapter, /amount\?\.let \{ put\("amount", it\) \}/);
+  assert.match(adapter, /enabled\?\.let \{ put\("enabled", it\) \}/);
+  assert.match(adapter, /config = data\["config"\]\.asMap\(\)/);
+  assert.match(ui, /result\.value\.config \?: adminConfig\.withAppliedConfigUpdate\(request\)/);
+  assert.match(adapter, /adminConfigUpdateErrorMessage/);
+  assert.match(adapter, /No pudimos guardar la tarifa/);
+  assert.match(adapter, /no está actualizada para tarifas de envío/);
   assert.doesNotMatch(ui, /sin guardar datos reales|No se aplicaron cambios reales|Confirmar de forma visual|guardar borrador visual|confirmar visualmente|maqueta|prototipo|Alta de roles|ruta heredada/);
   assert.doesNotMatch(adapter, /collection\(ORDERS\)\.document\(.+\.update|collection\(ORDERS\)\.document\(.+\.set/);
 });

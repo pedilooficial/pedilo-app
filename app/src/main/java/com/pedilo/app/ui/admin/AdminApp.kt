@@ -495,7 +495,10 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
             configMessage = ""
             configError = ""
             when (val result = adminOrders.updateAdminConfig(request)) {
-                is CoreResult.Success -> configMessage = result.value.message
+                is CoreResult.Success -> {
+                    adminConfig = result.value.config ?: adminConfig.withAppliedConfigUpdate(request)
+                    configMessage = result.value.message.ifBlank { "Guardado." }
+                }
                 is CoreResult.Failure -> configError = result.error.adminHumanError()
             }
         }
@@ -1973,7 +1976,7 @@ private fun AdminRainModeScreen(
     message: String,
     error: String,
     onToggle: () -> Unit,
-    onAmount: (Int) -> Unit,
+    onAmount: (Long) -> Unit,
 ) {
     var amountText by remember(config.rainDeliveryFee) { mutableStateOf(config.rainDeliveryFee.toString()) }
     var inputError by remember { mutableStateOf("") }
@@ -2008,9 +2011,9 @@ private fun AdminRainModeScreen(
                 currentValue = config.rainDeliveryFee,
                 inputLabel = "Nueva tarifa",
                 amountText = amountText,
-                onAmountText = { amountText = it.filter(Char::isDigit).take(6) },
+                onAmountText = { amountText = it.filter(Char::isDigit) },
                 onSubmit = {
-                    val amount = amountText.toIntOrNull()
+                    val amount = amountText.toLongOrNull()
                     if (amount == null) {
                         inputError = "Cargá un valor numérico."
                     } else {
@@ -2029,9 +2032,9 @@ private fun AdminRainModeScreen(
 @Composable
 private fun AdminMoneyConfigScreen(
     title: String,
-    currentValue: Int,
+    currentValue: Long,
     inputLabel: String,
-    onAmount: (Int) -> Unit,
+    onAmount: (Long) -> Unit,
     message: String,
     error: String,
 ) {
@@ -2053,9 +2056,9 @@ private fun AdminMoneyConfigScreen(
                 currentValue = currentValue,
                 inputLabel = inputLabel,
                 amountText = amountText,
-                onAmountText = { amountText = it.filter(Char::isDigit).take(6) },
+                onAmountText = { amountText = it.filter(Char::isDigit) },
                 onSubmit = {
-                    val amount = amountText.toIntOrNull()
+                    val amount = amountText.toLongOrNull()
                     if (amount == null) {
                         inputError = "Cargá un valor numérico."
                     } else {
@@ -2074,7 +2077,7 @@ private fun AdminMoneyConfigScreen(
 @Composable
 private fun AdminMoneyEditor(
     title: String,
-    currentValue: Int,
+    currentValue: Long,
     inputLabel: String,
     amountText: String,
     onAmountText: (String) -> Unit,
@@ -2118,7 +2121,16 @@ private fun AdminValuePanel(title: String, value: String, toneColor: Color) {
     }
 }
 
-private fun adminMoney(value: Int): String = "\$$value"
+private fun adminMoney(value: Long): String = "\$$value"
+
+private fun AdminConfigState.withAppliedConfigUpdate(request: AdminConfigUpdateRequest): AdminConfigState =
+    when (request.field) {
+        "rainMode" -> request.enabled?.let { copy(rainMode = it) } ?: this
+        "rainDeliveryFee" -> request.amount?.let { copy(rainDeliveryFee = it) } ?: this
+        "baseDeliveryFee" -> request.amount?.let { copy(baseDeliveryFee = it) } ?: this
+        "distanceSurcharge" -> request.amount?.let { copy(distanceSurcharge = it) } ?: this
+        else -> this
+    }
 
 @Composable
 private fun AdminTeamUserCard(

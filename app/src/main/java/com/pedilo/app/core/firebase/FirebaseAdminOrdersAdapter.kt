@@ -258,11 +258,26 @@ class FirebaseAdminOrdersAdapter(
             val result = functions.getHttpsCallable(ADMIN_UPDATE_CONFIG).call(request.toCallablePayload()).await()
             @Suppress("UNCHECKED_CAST")
             val data = result.getData() as? Map<String, Any?> ?: emptyMap()
-            AdminMutationResult(data["message"].asText().ifBlank { "Configuración actualizada y persistida." })
+            AdminMutationResult(
+                message = data["message"].asText().ifBlank { "Configuración actualizada y persistida." },
+                config = data["config"].asMap().takeIf { it.isNotEmpty() }?.toAdminConfigState(),
+            )
         }.fold(
             onSuccess = { CoreResult.Success(it) },
-            onFailure = { CoreResult.Failure(CoreError.Operational((it as? FirebaseFunctionsException)?.message ?: "No pudimos actualizar la configuración.")) },
+            onFailure = { CoreResult.Failure(CoreError.Operational(adminConfigUpdateErrorMessage(request, it))) },
         )
+
+    private fun adminConfigUpdateErrorMessage(request: AdminConfigUpdateRequest, error: Throwable): String {
+        val message = (error as? FirebaseFunctionsException)?.message.orEmpty()
+        val code = (error as? FirebaseFunctionsException)?.code
+        if (message.equals("INTERNAL", ignoreCase = true) || code == FirebaseFunctionsException.Code.INTERNAL) {
+            return "No pudimos guardar la tarifa. Verificá conexión e intentá de nuevo."
+        }
+        if (request.amount != null && message == "Elegí una configuración válida.") {
+            return "La función adminUpdateConfig no está actualizada para tarifas de envío. Revisá que la app instalada use el proyecto Firebase correcto y que Functions esté desplegado con esta versión."
+        }
+        return message.ifBlank { "No pudimos actualizar la configuración." }
+    }
 
     private fun com.google.firebase.firestore.DocumentSnapshot.toSummary(): AdminOrderSummary =
         AdminOrderSummary(
@@ -321,9 +336,9 @@ class FirebaseAdminOrdersAdapter(
         AdminConfigState(
             id = id,
             rainMode = getBoolean(RAIN_MODE) ?: false,
-            rainDeliveryFee = (get(RAIN_DELIVERY_FEE) as? Number)?.toInt() ?: DEFAULT_RAIN_DELIVERY_FEE,
-            baseDeliveryFee = (get(BASE_DELIVERY_FEE) as? Number)?.toInt() ?: DEFAULT_BASE_DELIVERY_FEE,
-            distanceSurcharge = (get(DISTANCE_SURCHARGE) as? Number)?.toInt() ?: DEFAULT_DISTANCE_SURCHARGE,
+            rainDeliveryFee = (get(RAIN_DELIVERY_FEE) as? Number)?.toLong() ?: DEFAULT_RAIN_DELIVERY_FEE,
+            baseDeliveryFee = (get(BASE_DELIVERY_FEE) as? Number)?.toLong() ?: DEFAULT_BASE_DELIVERY_FEE,
+            distanceSurcharge = (get(DISTANCE_SURCHARGE) as? Number)?.toLong() ?: DEFAULT_DISTANCE_SURCHARGE,
             lastUpdatedBy = getString(LAST_UPDATED_BY).orEmpty().ifBlank { getString(UPDATED_BY).orEmpty() },
             updatedAtMillis = (get(UPDATED_AT) as? Timestamp)?.toDate()?.time,
         )
@@ -343,9 +358,9 @@ class FirebaseAdminOrdersAdapter(
         AdminConfigState(
             id = this["id"].asText().ifBlank { ADMIN_CONFIG_REAL_USE },
             rainMode = this[RAIN_MODE].asBoolValue(),
-            rainDeliveryFee = this[RAIN_DELIVERY_FEE].asIntValue(DEFAULT_RAIN_DELIVERY_FEE),
-            baseDeliveryFee = this[BASE_DELIVERY_FEE].asIntValue(DEFAULT_BASE_DELIVERY_FEE),
-            distanceSurcharge = this[DISTANCE_SURCHARGE].asIntValue(DEFAULT_DISTANCE_SURCHARGE),
+            rainDeliveryFee = this[RAIN_DELIVERY_FEE].asLongValue(DEFAULT_RAIN_DELIVERY_FEE),
+            baseDeliveryFee = this[BASE_DELIVERY_FEE].asLongValue(DEFAULT_BASE_DELIVERY_FEE),
+            distanceSurcharge = this[DISTANCE_SURCHARGE].asLongValue(DEFAULT_DISTANCE_SURCHARGE),
             lastUpdatedBy = this[LAST_UPDATED_BY].asText().ifBlank { this[UPDATED_BY].asText() },
         )
 
@@ -381,15 +396,17 @@ class FirebaseAdminOrdersAdapter(
         )
 
     private fun AdminConfigUpdateRequest.toCallablePayload(): Map<String, Any?> =
-        mapOf(
-            "field" to field,
-            "enabled" to enabled,
-            "amount" to amount,
-        )
+        buildMap {
+            put("field", field)
+            enabled?.let { put("enabled", it) }
+            amount?.let { put("amount", it) }
+        }
 
     private fun Any?.asText(): String = this as? String ?: ""
 
     private fun Any?.asIntValue(default: Int = 0): Int = (this as? Number)?.toInt() ?: default
+
+    private fun Any?.asLongValue(default: Long = 0L): Long = (this as? Number)?.toLong() ?: default
 
     private fun Any?.asBoolValue(default: Boolean = false): Boolean = this as? Boolean ?: default
 
@@ -517,9 +534,9 @@ class FirebaseAdminOrdersAdapter(
         const val RAIN_DELIVERY_FEE = "rainDeliveryFee"
         const val BASE_DELIVERY_FEE = "baseDeliveryFee"
         const val DISTANCE_SURCHARGE = "distanceSurcharge"
-        const val DEFAULT_RAIN_DELIVERY_FEE = 4000
-        const val DEFAULT_BASE_DELIVERY_FEE = 3500
-        const val DEFAULT_DISTANCE_SURCHARGE = 1500
+        const val DEFAULT_RAIN_DELIVERY_FEE = 4000L
+        const val DEFAULT_BASE_DELIVERY_FEE = 3500L
+        const val DEFAULT_DISTANCE_SURCHARGE = 1500L
         const val LAST_UPDATED_BY = "lastUpdatedBy"
         const val UPDATED_BY = "updatedBy"
         const val OPERATE_LIVE_ORDER = "operateLiveOrder"

@@ -190,9 +190,9 @@ data class AdminTeamUser(
 data class AdminConfigState(
     val id: String = "real_use",
     val rainMode: Boolean = false,
-    val rainDeliveryFee: Int = 4000,
-    val baseDeliveryFee: Int = 3500,
-    val distanceSurcharge: Int = 1500,
+    val rainDeliveryFee: Long = 4000L,
+    val baseDeliveryFee: Long = 3500L,
+    val distanceSurcharge: Long = 1500L,
     val lastUpdatedBy: String = "",
     val updatedAtMillis: Long? = null,
 )
@@ -200,7 +200,7 @@ data class AdminConfigState(
 data class AdminConfigUpdateRequest(
     val field: String,
     val enabled: Boolean? = null,
-    val amount: Int? = null,
+    val amount: Long? = null,
 )
 
 data class AdminRoleUpdateRequest(
@@ -211,4 +211,5 @@ data class AdminRoleUpdateRequest(
 
 data class AdminMutationResult(
     val message: String,
+    val config: AdminConfigState? = null,
 )

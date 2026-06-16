@@ -42,6 +42,12 @@ const ARCHIVE_STATUS_LIVE = "live";
 const RESPONSIBLE_ADMIN = "admin";
 const ASSIGNED_ACTOR_UNASSIGNED = "";
 const DEFAULT_DRIVER_CAPACITY = 3;
+const DEFAULT_ADMIN_DELIVERY_CONFIG = {
+  rainMode: false,
+  rainDeliveryFee: 4000,
+  baseDeliveryFee: 3500,
+  distanceSurcharge: 1500,
+};
 const INITIAL_TIMEOUT_POLICY = {
   code: "initial_admin_review",
   mode: "worker",
@@ -190,6 +196,7 @@ const MODULE_HEALTH = [
 exports.createLocalOrder = onCall({region: REGION}, async (request) => {
   const payload = request.data || {};
   const clean = cleanOrderPayload(payload);
+  const deliveryConfig = await readAdminDeliveryConfig();
 
   const storeSnap = await db.collection(STORES).doc(clean.storeId).get();
   if (!storeSnap.exists || storeSnap.get("visible") !== true) {
@@ -229,11 +236,13 @@ exports.createLocalOrder = onCall({region: REGION}, async (request) => {
   }
 
   const subtotal = items.reduce((sum, item) => sum + (item.total || 0), 0);
+  const deliveryPricing = deliveryPricingForOrder(deliveryConfig, clean);
   const finance = buildFinancialContract({
     paymentMethod: clean.paymentMethod,
     subtotal,
     source: LOCAL_SOURCE,
     orderType: "local_order",
+    deliveryPricing,
   });
   const idempotencyKey = publicIdempotencyKey(LOCAL_SOURCE, clean);
   const orderRef = db.collection(ORDERS).doc(idempotencyKey);
@@ -260,6 +269,7 @@ exports.createLocalOrder = onCall({region: REGION}, async (request) => {
       pricing: {
         ...finance.financialSnapshot,
       },
+      deliveryPricing: finance.deliveryPricingSnapshot,
       note: clean.note,
     },
   });
@@ -291,11 +301,12 @@ exports.createLocalOrder = onCall({region: REGION}, async (request) => {
 exports.createPlusOrder = onCall({region: REGION}, async (request) => {
   const payload = request.data || {};
   const clean = cleanPlusOrderPayload(payload);
+  const deliveryConfig = await readAdminDeliveryConfig();
   const idempotencyKey = publicIdempotencyKey(clean.source, clean);
   const orderRef = db.collection(ORDERS).doc(idempotencyKey);
   const trackingNumber = publicNumberFor(orderRef.id);
   const now = admin.firestore.FieldValue.serverTimestamp();
-  const orderData = plusOrderData(clean, trackingNumber, now, idempotencyKey);
+  const orderData = plusOrderData(clean, trackingNumber, now, idempotencyKey, deliveryConfig);
 
   await createOrderWithInitialEvent(orderRef, orderData, now);
 
@@ -1251,10 +1262,16 @@ exports.adminUpdateConfig = onCall({region: REGION}, async (request) => {
   const booleanFields = ["rainMode"];
   const amountFields = ["rainDeliveryFee", "baseDeliveryFee", "distanceSurcharge"];
   const isBooleanUpdate = booleanFields.includes(field) && typeof enabled === "boolean";
-  const isAmountUpdate = amountFields.includes(field) && Number.isInteger(amount) && amount >= 0 && amount <= 999999;
+  const isAmountUpdate = amountFields.includes(field) && typeof amount === "number" && Number.isInteger(amount) && amount >= 0;
 
-  if (!isBooleanUpdate && !isAmountUpdate) {
-    throw new HttpsError("invalid-argument", "Elegí una configuración válida.");
+  if (!booleanFields.includes(field) && !amountFields.includes(field)) {
+    throw new HttpsError("invalid-argument", "Campo de configuración inválido.");
+  }
+  if (booleanFields.includes(field) && typeof enabled !== "boolean") {
+    throw new HttpsError("invalid-argument", "Valor inválido: el modo lluvia debe ser activo o desactivado.");
+  }
+  if (amountFields.includes(field) && (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0)) {
+    throw new HttpsError("invalid-argument", "Valor inválido: cargá un número entero no negativo.");
   }
 
   const configRef = db.collection("admin_config").doc("real_use");
@@ -1264,8 +1281,15 @@ exports.adminUpdateConfig = onCall({region: REGION}, async (request) => {
 
   await db.runTransaction(async (tx) => {
     const current = await tx.get(configRef);
-    tx.set(configRef, {
+    const currentConfig = adminDeliveryConfigFromSnapshot(current);
+    const previousRawValue = current.exists ? current.get(field) : undefined;
+    const previousValue = previousRawValue === undefined ? null : previousRawValue;
+    const nextConfig = {
+      ...currentConfig,
       [field]: nextValue,
+    };
+    tx.set(configRef, {
+      ...nextConfig,
       updatedAt: now,
       updatedBy: actor.uid,
       lastUpdatedBy: actor.uid,
@@ -1275,14 +1299,21 @@ exports.adminUpdateConfig = onCall({region: REGION}, async (request) => {
       actorUid: actor.uid,
       actorRole: actor.role,
       field,
-      previousValue: current.exists ? current.get(field) : null,
+      previousValue,
       nextValue,
       summary: "Admin actualizó configuración.",
       createdAt: now,
     });
   });
 
-  return {field, enabled: isBooleanUpdate ? enabled : null, amount: isAmountUpdate ? amount : null, message: "Configuración actualizada y auditada."};
+  const saved = await readAdminDeliveryConfig();
+  return {
+    field,
+    enabled: isBooleanUpdate ? saved.rainMode : null,
+    amount: isAmountUpdate ? saved[field] : null,
+    config: saved,
+    message: "Guardado.",
+  };
 });
 
 exports.getAdminConfig = onCall({region: REGION}, async (request) => {
@@ -1294,10 +1325,7 @@ exports.getAdminConfig = onCall({region: REGION}, async (request) => {
     const current = await tx.get(configRef);
     if (current.exists) return;
     tx.set(configRef, {
-      rainMode: false,
-      rainDeliveryFee: 4000,
-      baseDeliveryFee: 3500,
-      distanceSurcharge: 1500,
+      ...DEFAULT_ADMIN_DELIVERY_CONFIG,
       updatedAt: now,
       updatedBy: actor.uid,
       lastUpdatedBy: actor.uid,
@@ -1316,12 +1344,31 @@ exports.getAdminConfig = onCall({region: REGION}, async (request) => {
   return {
     id: snap.id,
     rainMode: snap.get("rainMode") === true,
-    rainDeliveryFee: Number.isInteger(snap.get("rainDeliveryFee")) ? snap.get("rainDeliveryFee") : 4000,
-    baseDeliveryFee: Number.isInteger(snap.get("baseDeliveryFee")) ? snap.get("baseDeliveryFee") : 3500,
-    distanceSurcharge: Number.isInteger(snap.get("distanceSurcharge")) ? snap.get("distanceSurcharge") : 1500,
+    rainDeliveryFee: validConfigAmountOrDefault(snap.get("rainDeliveryFee"), DEFAULT_ADMIN_DELIVERY_CONFIG.rainDeliveryFee),
+    baseDeliveryFee: validConfigAmountOrDefault(snap.get("baseDeliveryFee"), DEFAULT_ADMIN_DELIVERY_CONFIG.baseDeliveryFee),
+    distanceSurcharge: validConfigAmountOrDefault(snap.get("distanceSurcharge"), DEFAULT_ADMIN_DELIVERY_CONFIG.distanceSurcharge),
     lastUpdatedBy: cleanText(snap.get("lastUpdatedBy") || snap.get("updatedBy")),
   };
 });
+
+async function readAdminDeliveryConfig() {
+  const snap = await db.collection("admin_config").doc("real_use").get();
+  return adminDeliveryConfigFromSnapshot(snap);
+}
+
+function adminDeliveryConfigFromSnapshot(snap) {
+  if (!snap.exists) return {...DEFAULT_ADMIN_DELIVERY_CONFIG};
+  return {
+    rainMode: snap.get("rainMode") === true,
+    rainDeliveryFee: validConfigAmountOrDefault(snap.get("rainDeliveryFee"), DEFAULT_ADMIN_DELIVERY_CONFIG.rainDeliveryFee),
+    baseDeliveryFee: validConfigAmountOrDefault(snap.get("baseDeliveryFee"), DEFAULT_ADMIN_DELIVERY_CONFIG.baseDeliveryFee),
+    distanceSurcharge: validConfigAmountOrDefault(snap.get("distanceSurcharge"), DEFAULT_ADMIN_DELIVERY_CONFIG.distanceSurcharge),
+  };
+}
+
+function validConfigAmountOrDefault(value, fallback) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+}
 
 async function requireAdminActor(request) {
   const uid = request.auth && request.auth.uid;
@@ -2352,6 +2399,7 @@ function cleanOrderPayload(payload) {
     paymentMethod,
     note,
     items,
+    distanceSurchargeApplies: orderHasDistanceSurcharge(payload),
   };
 }
 
@@ -2404,13 +2452,89 @@ function cleanPlusOrderPayload(payload) {
     paymentMethod,
     amount,
     schedule,
+    distanceSurchargeApplies: orderHasDistanceSurcharge(payload),
   };
 }
 
-function buildFinancialContract({paymentMethod, subtotal, source, orderType}) {
+function deliveryPricingForOrder(config, orderContext = {}) {
+  const cleanConfig = {
+    rainMode: config && config.rainMode === true,
+    rainDeliveryFee: validConfigAmountOrDefault(config && config.rainDeliveryFee, DEFAULT_ADMIN_DELIVERY_CONFIG.rainDeliveryFee),
+    baseDeliveryFee: validConfigAmountOrDefault(config && config.baseDeliveryFee, DEFAULT_ADMIN_DELIVERY_CONFIG.baseDeliveryFee),
+    distanceSurcharge: validConfigAmountOrDefault(config && config.distanceSurcharge, DEFAULT_ADMIN_DELIVERY_CONFIG.distanceSurcharge),
+  };
+  const baseFee = cleanConfig.rainMode ? cleanConfig.rainDeliveryFee : cleanConfig.baseDeliveryFee;
+  const distanceSurchargeApplied = orderHasDistanceSurcharge(orderContext);
+  const distanceSurcharge = distanceSurchargeApplied ? cleanConfig.distanceSurcharge : 0;
+  const deliveryFee = baseFee + distanceSurcharge;
+  return {
+    rainMode: cleanConfig.rainMode,
+    rainDeliveryFee: cleanConfig.rainDeliveryFee,
+    baseDeliveryFee: cleanConfig.baseDeliveryFee,
+    distanceSurcharge: cleanConfig.distanceSurcharge,
+    baseFee,
+    distanceSurchargeApplied,
+    appliedDistanceSurcharge: distanceSurcharge,
+    deliveryFee,
+    deliveryFeeCents: deliveryFee * 100,
+    currency: "ARS",
+  };
+}
+
+function normalizeDeliveryPricingSnapshot(deliveryPricing) {
+  if (!deliveryPricing || typeof deliveryPricing !== "object") {
+    return {
+      rainMode: false,
+      rainDeliveryFee: DEFAULT_ADMIN_DELIVERY_CONFIG.rainDeliveryFee,
+      baseDeliveryFee: DEFAULT_ADMIN_DELIVERY_CONFIG.baseDeliveryFee,
+      distanceSurcharge: DEFAULT_ADMIN_DELIVERY_CONFIG.distanceSurcharge,
+      baseFee: 0,
+      distanceSurchargeApplied: false,
+      appliedDistanceSurcharge: 0,
+      deliveryFee: 0,
+      deliveryFeeCents: 0,
+      currency: "ARS",
+    };
+  }
+  const deliveryFee = validConfigAmountOrDefault(deliveryPricing.deliveryFee, 0);
+  const currency = cleanText(deliveryPricing.currency) || "ARS";
+  return {
+    rainMode: deliveryPricing.rainMode === true,
+    rainDeliveryFee: validConfigAmountOrDefault(deliveryPricing.rainDeliveryFee, DEFAULT_ADMIN_DELIVERY_CONFIG.rainDeliveryFee),
+    baseDeliveryFee: validConfigAmountOrDefault(deliveryPricing.baseDeliveryFee, DEFAULT_ADMIN_DELIVERY_CONFIG.baseDeliveryFee),
+    distanceSurcharge: validConfigAmountOrDefault(deliveryPricing.distanceSurcharge, DEFAULT_ADMIN_DELIVERY_CONFIG.distanceSurcharge),
+    baseFee: validConfigAmountOrDefault(deliveryPricing.baseFee, deliveryFee),
+    distanceSurchargeApplied: deliveryPricing.distanceSurchargeApplied === true,
+    appliedDistanceSurcharge: validConfigAmountOrDefault(deliveryPricing.appliedDistanceSurcharge, 0),
+    deliveryFee,
+    deliveryFeeCents: assertValidMoneyAmount(deliveryPricing.deliveryFeeCents ?? deliveryFee * 100, "deliveryFee"),
+    currency,
+  };
+}
+
+function orderHasDistanceSurcharge(context = {}) {
+  const delivery = context.delivery && typeof context.delivery === "object" ? context.delivery : {};
+  const distance = context.distance && typeof context.distance === "object" ? context.distance : {};
+  const pricing = context.pricing && typeof context.pricing === "object" ? context.pricing : {};
+  const deliveryPricing = context.deliveryPricing && typeof context.deliveryPricing === "object" ? context.deliveryPricing : {};
+  return [
+    context.distanceSurchargeApplies,
+    context.hasDistanceSurcharge,
+    context.applyDistanceSurcharge,
+    delivery.distanceSurchargeApplies,
+    delivery.hasDistanceSurcharge,
+    distance.distanceSurchargeApplies,
+    distance.hasDistanceSurcharge,
+    pricing.distanceSurchargeApplied,
+    deliveryPricing.distanceSurchargeApplied,
+  ].some((value) => value === true);
+}
+
+function buildFinancialContract({paymentMethod, subtotal, source, orderType, deliveryPricing = null}) {
   const normalizedMethod = normalizePaymentMethod(paymentMethod);
   const cleanSubtotal = assertValidMoneyAmount(subtotal, "subtotal");
-  const deliveryFee = 0;
+  const cleanDeliveryPricing = normalizeDeliveryPricingSnapshot(deliveryPricing);
+  const deliveryFee = assertValidMoneyAmount(cleanDeliveryPricing.deliveryFeeCents, "deliveryFee");
   const extraFees = [];
   const discounts = [];
   const total = cleanSubtotal + deliveryFee + extraFees.reduce((sum, fee) => sum + assertValidMoneyAmount(fee.amount || 0, "extraFee"), 0) -
@@ -2435,6 +2559,7 @@ function buildFinancialContract({paymentMethod, subtotal, source, orderType}) {
     paymentMethod: normalizedMethod,
     subtotal: cleanSubtotal,
     deliveryFee,
+    deliveryPricing: cleanDeliveryPricing,
     extraFees,
     discounts,
     total,
@@ -2460,6 +2585,7 @@ function buildFinancialContract({paymentMethod, subtotal, source, orderType}) {
     cashResponsibleRole,
     cashResponsibleActorId,
     financialSnapshot,
+    deliveryPricingSnapshot: cleanDeliveryPricing,
     financialUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     financialNotes,
   };
@@ -2522,14 +2648,16 @@ function cleanPlusItem(item) {
   };
 }
 
-function plusOrderData(clean, trackingNumber, now, idempotencyKey) {
+function plusOrderData(clean, trackingNumber, now, idempotencyKey, deliveryConfig = DEFAULT_ADMIN_DELIVERY_CONFIG) {
   const orderType = clean.requestType === "buy" ? "direct_purchase" : "pickup_shipping";
   const subtotal = parsePublicAmountToCents(clean.amount);
+  const deliveryPricing = deliveryPricingForOrder(deliveryConfig, clean);
   const finance = buildFinancialContract({
     paymentMethod: clean.paymentMethod,
     subtotal,
     source: clean.source,
     orderType,
+    deliveryPricing,
   });
   const base = liveBirthContract({
     orderType,
@@ -2544,6 +2672,7 @@ function plusOrderData(clean, trackingNumber, now, idempotencyKey) {
       sourceReference: clean.sourceReference,
       destination: clean.destination,
       financialSnapshot: finance.financialSnapshot,
+      deliveryPricing: finance.deliveryPricingSnapshot,
       amount: clean.amount,
       schedule: clean.schedule,
       note: clean.note,

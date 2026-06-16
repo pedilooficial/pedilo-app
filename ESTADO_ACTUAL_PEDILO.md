@@ -24,7 +24,7 @@ Pedilo es una app Android Compose con backend Firebase/Cloud Functions. El pedid
 - Tracking publico por numero.
 - Operacion interna de pedidos vivos para Admin, Store y Driver.
 - Eventos e incidencias bajo cada pedido.
-- Admin Configuracion reconstruida desde cero para Tarifa envio, con persistencia real de Modo lluvia, tarifa lluvia, costo de envio y adicional por distancia.
+- Admin Configuracion reconstruida desde cero para Tarifa envio, con persistencia real de Modo lluvia, tarifa lluvia, costo de envio y adicional por distancia; los pedidos nuevos con envio toman esa configuracion en su snapshot financiero.
 - Admin Equipo para roles/accesos existentes.
 - Guards de arquitectura, UI y flujos operativos.
 
