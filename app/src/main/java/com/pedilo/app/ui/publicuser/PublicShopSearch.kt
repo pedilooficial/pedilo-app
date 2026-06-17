@@ -104,6 +104,7 @@ fun PublicShopSearchScreen(
     query: String,
     current: PublicBottomDestination = PublicBottomDestination.Shop,
     catalogState: PublicCatalogState = PublicCatalogState(isLoading = false),
+    publicTitle: String = "Pédilo!",
     onHome: () -> Unit,
     onPlus: () -> Unit,
     onShop: () -> Unit,
@@ -135,6 +136,7 @@ fun PublicShopSearchScreen(
                 SearchHeader(
                     query = activeQuery,
                     titleOverride = titleOverride,
+                    publicTitle = publicTitle,
                 )
             }
             if (!listingMode) {
@@ -172,7 +174,7 @@ fun PublicShopSearchScreen(
 }
 
 @Composable
-private fun SearchHeader(query: String, titleOverride: String?) {
+private fun SearchHeader(query: String, titleOverride: String?, publicTitle: String) {
     val hasQuery = query.isNotBlank()
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -180,7 +182,7 @@ private fun SearchHeader(query: String, titleOverride: String?) {
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = titleOverride ?: if (hasQuery) "Resultado: ${query.trim()}" else "Pédilo!",
+                text = titleOverride ?: if (hasQuery) "Resultado: ${query.trim()}" else publicTitle,
                 fontSize = 24.sp,
                 lineHeight = 27.sp,
                 fontWeight = FontWeight.ExtraBold,

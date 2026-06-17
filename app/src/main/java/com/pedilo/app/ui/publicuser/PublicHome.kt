@@ -1,6 +1,8 @@
 package com.pedilo.app.ui.publicuser
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +48,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -55,8 +60,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pedilo.app.core.model.PublicConfiguration
+import com.pedilo.app.core.model.PublicQuickAccessConfig
 import com.pedilo.app.core.model.PublicProductSummary
 import com.pedilo.app.core.model.PublicStoreSummary
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class PublicBottomDestination {
     Home,
@@ -85,18 +95,13 @@ private data class QuickAccess(
     val title: String,
     val icon: PediloIconKind,
     val query: String,
-)
-
-private val quickAccessItems = listOf(
-    QuickAccess("Supermercado", PediloIconKind.Cart, "Supermercado"),
-    QuickAccess("Bebidas", PediloIconKind.Bottle, "Bebidas"),
-    QuickAccess("Farmacia", PediloIconKind.Pill, "Farmacia"),
-    QuickAccess("Mascotas", PediloIconKind.Paw, "Mascotas"),
+    val imageUrl: String,
 )
 
 @Composable
 fun PublicHomeScreen(
     catalogState: PublicCatalogState = PublicCatalogState(isLoading = false),
+    publicConfig: PublicConfiguration = PublicConfiguration(),
     onHome: () -> Unit,
     onPlus: () -> Unit,
     onShop: () -> Unit,
@@ -123,13 +128,15 @@ fun PublicHomeScreen(
             contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 132.dp),
             verticalArrangement = Arrangement.spacedBy(11.dp),
         ) {
-            item { PublicHeader(onTeam = onTeam) }
+            item { PublicHeader(title = publicConfig.title, subtitle = publicConfig.subtitle, onTeam = onTeam) }
             item { SearchBlock(onSearch = onSearch) }
-            item { PublicFlowCard(onShop = onShop, onConventions = onConventions) }
-            item { QuickAccessSection(onCategory = onCategory) }
+            if (publicConfig.advertising.isVisible) {
+                item { PublicAdvertisingCard(config = publicConfig, onShop = onShop, onConventions = onConventions) }
+            }
+            item { QuickAccessSection(items = publicConfig.quickAccess.map { it.toQuickAccess() }, onCategory = onCategory) }
             item { OffersSection(catalogState = catalogState, onOffer = onOffer, onAllOffers = onAllOffers) }
             item { LocalsSection(catalogState = catalogState, onLocal = onLocal, onAllLocals = onAllLocals) }
-            item { HomeBanner(onConventions = onConventions) }
+            item { HomeBanner(publicConfig = publicConfig, onConventions = onConventions) }
         }
     }
 }
@@ -159,7 +166,7 @@ fun PublicShell(
 }
 
 @Composable
-private fun PublicHeader(onTeam: () -> Unit) {
+private fun PublicHeader(title: String, subtitle: String, onTeam: () -> Unit) {
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -168,7 +175,7 @@ private fun PublicHeader(onTeam: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "Pédilo!",
+                text = title,
                 fontSize = 50.sp,
                 lineHeight = 50.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -178,7 +185,7 @@ private fun PublicHeader(onTeam: () -> Unit) {
                 ),
             )
             Text(
-                text = "todos tus pedidos en un solo lugar",
+                text = subtitle,
                 color = PediloText,
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
@@ -256,7 +263,8 @@ private fun SearchInput(onSearch: () -> Unit) {
 }
 
 @Composable
-private fun PublicFlowCard(onShop: () -> Unit, onConventions: () -> Unit) {
+private fun PublicAdvertisingCard(config: PublicConfiguration, onShop: () -> Unit, onConventions: () -> Unit) {
+    val firstImage = config.advertising.imageUrls.firstOrNull().orEmpty()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -266,11 +274,33 @@ private fun PublicFlowCard(onShop: () -> Unit, onConventions: () -> Unit) {
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Pedí sin vueltas", color = PediloText, fontSize = 17.sp, lineHeight = 20.sp, fontWeight = FontWeight.ExtraBold)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PublicFlowStep("1", "Local", Modifier.weight(1f))
-            PublicFlowStep("2", "Datos", Modifier.weight(1f))
-            PublicFlowStep("3", "Seguí", Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(106.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Brush.horizontalGradient(listOf(PediloOrangeDark, PediloPanelSoft))),
+        ) {
+            PublicRemoteImage(firstImage, modifier = Modifier.matchParentSize())
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 0.14f), Color.Black.copy(alpha = 0.56f)))),
+            )
+            config.advertising.text.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    color = Color.White,
+                    fontSize = 17.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(12.dp),
+                )
+            }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PublicFlowButton("Ver tienda", PediloIconKind.Shop, onShop, Modifier.weight(1f))
@@ -320,12 +350,12 @@ private fun PublicFlowButton(label: String, icon: PediloIconKind, onClick: () ->
 }
 
 @Composable
-private fun QuickAccessSection(onCategory: (String) -> Unit) {
+private fun QuickAccessSection(items: List<QuickAccess>, onCategory: (String) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        quickAccessItems.forEach { item ->
+        items.forEach { item ->
             QuickAccessCard(item, onClick = { onCategory(item.query) }, modifier = Modifier.weight(1f))
         }
     }
@@ -333,7 +363,7 @@ private fun QuickAccessSection(onCategory: (String) -> Unit) {
 
 @Composable
 private fun QuickAccessCard(item: QuickAccess, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
+    Box(
         modifier = modifier
             .height(78.dp)
             .shadow(9.dp, RoundedCornerShape(12.dp), ambientColor = Color.Black.copy(alpha = 0.30f), spotColor = PediloOrange.copy(alpha = 0.10f))
@@ -341,22 +371,37 @@ private fun QuickAccessCard(item: QuickAccess, onClick: () -> Unit, modifier: Mo
             .border(1.dp, PediloLine.copy(alpha = 0.86f), RoundedCornerShape(12.dp))
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = item.title }
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .clip(RoundedCornerShape(12.dp)),
     ) {
-        PediloLineIcon(item.icon, tint = PediloOrange, modifier = Modifier.size(25.dp))
-        Spacer(Modifier.height(5.dp))
-        Text(
-            text = item.title,
-            color = PediloText,
-            fontSize = 9.sp,
-            lineHeight = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        PublicRemoteImage(
+            url = item.imageUrl,
+            modifier = Modifier.matchParentSize(),
         )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(Color.Black.copy(alpha = 0.38f)),
+        )
+        Column(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            PediloLineIcon(item.icon, tint = PediloOrange, modifier = Modifier.size(25.dp))
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = item.title,
+                color = PediloText,
+                fontSize = 9.sp,
+                lineHeight = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -500,7 +545,8 @@ private fun LocalCard(local: PublicStoreSummary, onClick: () -> Unit) {
 }
 
 @Composable
-private fun HomeBanner(onConventions: () -> Unit) {
+private fun HomeBanner(publicConfig: PublicConfiguration, onConventions: () -> Unit) {
+    val info = publicConfig.information
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -508,8 +554,9 @@ private fun HomeBanner(onConventions: () -> Unit) {
             .shadow(18.dp, RoundedCornerShape(18.dp), ambientColor = Color.Black.copy(alpha = 0.40f), spotColor = PediloOrange.copy(alpha = 0.26f))
             .background(Brush.horizontalGradient(listOf(PediloOrangeDark, PediloWarmDepth, PediloPanel, PediloPanelSoft)), RoundedCornerShape(18.dp))
             .border(1.dp, PediloWarning.copy(alpha = 0.62f), RoundedCornerShape(18.dp))
-            .semantics { contentDescription = "Aviso de envíos más rápidos" }
+            .semantics { contentDescription = "Información pública" }
     ) {
+        PublicRemoteImage(info.mainImageUrl, modifier = Modifier.matchParentSize())
         Box(
             modifier = Modifier
                 .matchParentSize()
@@ -540,15 +587,14 @@ private fun HomeBanner(onConventions: () -> Unit) {
                 .padding(horizontal = 16.dp),
         ) {
             Text(
-                "¡Envíos más rápidos!",
+                info.mainText,
                 color = Color.White,
                 fontSize = 18.sp,
                 lineHeight = 20.sp,
                 fontWeight = FontWeight.ExtraBold,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text("Tus locales favoritos, ahora más cerca.", color = Color.White.copy(alpha = 0.92f), fontSize = 12.sp, lineHeight = 15.sp)
             Spacer(Modifier.height(8.dp))
             Box(
                 modifier = Modifier
@@ -557,12 +603,48 @@ private fun HomeBanner(onConventions: () -> Unit) {
                     .background(Brush.verticalGradient(listOf(Color.White, PediloCream)), RoundedCornerShape(17.dp))
                     .border(1.dp, PediloWarning.copy(alpha = 0.46f), RoundedCornerShape(17.dp))
                     .clickable(role = Role.Button, onClick = onConventions)
-                    .semantics { contentDescription = "Ver más" },
+                    .semantics { contentDescription = info.buttonText },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Ver más", color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
+                Text(info.buttonText, color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
+    }
+}
+
+private fun PublicQuickAccessConfig.toQuickAccess(): QuickAccess =
+    QuickAccess(
+        title = title,
+        icon = when {
+            storeType.contains("bebida", ignoreCase = true) -> PediloIconKind.Bottle
+            storeType.contains("farm", ignoreCase = true) -> PediloIconKind.Pill
+            storeType.contains("masc", ignoreCase = true) -> PediloIconKind.Paw
+            else -> PediloIconKind.Cart
+        },
+        query = storeType,
+        imageUrl = imageUrl,
+    )
+
+@Composable
+private fun PublicRemoteImage(url: String, modifier: Modifier = Modifier) {
+    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(url) {
+        bitmap = null
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            bitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    URL(url).openStream().use { BitmapFactory.decodeStream(it) }
+                }.getOrNull()
+            }
+        }
+    }
+    bitmap?.let {
+        Image(
+            bitmap = it.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
     }
 }
 

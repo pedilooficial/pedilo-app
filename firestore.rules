@@ -73,6 +73,16 @@ service cloud.firestore {
       }
     }
 
+    match /public_config/{configId} {
+      allow read: if configId == "home";
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
     match /stores/{storeId} {
       allow read: if resource.data.visible == true;
       allow create, update, delete: if false;

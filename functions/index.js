@@ -13,6 +13,8 @@ const PUBLIC_CLAIMS = "public_claims";
 const CASHBOX_CLOSURES = "cashbox_closures";
 const STORES = "stores";
 const PRODUCTS = "products";
+const PUBLIC_CONFIG = "public_config";
+const PUBLIC_CONFIG_HOME = "home";
 const LOCAL_SOURCE = "public_local";
 const PLUS_BUY_SOURCE = "public_plus_buy";
 const PLUS_PICKUP_SHIPPING_SOURCE = "public_plus_pickup_shipping";
@@ -47,6 +49,26 @@ const DEFAULT_ADMIN_DELIVERY_CONFIG = {
   rainDeliveryFee: 4000,
   baseDeliveryFee: 3500,
   distanceSurcharge: 1500,
+};
+const DEFAULT_PUBLIC_CONFIG = {
+  title: "Pédilo!",
+  subtitle: "todos tus pedidos en un solo lugar",
+  quickAccess: [
+    {title: "Supermercado", storeType: "Supermercado", imageUrl: "pedilo://default/quick-access"},
+    {title: "Bebidas", storeType: "Bebidas", imageUrl: "pedilo://default/quick-access"},
+    {title: "Farmacia", storeType: "Farmacia", imageUrl: "pedilo://default/quick-access"},
+    {title: "Mascotas", storeType: "Mascotas", imageUrl: "pedilo://default/quick-access"},
+  ],
+  advertising: {text: "", imageUrls: []},
+  information: {
+    mainText: "Tus locales favoritos, ahora más cerca.",
+    mainImageUrl: "pedilo://default/information",
+    buttonText: "Ver más",
+    daily: {text: "", description: "", imageUrl: ""},
+    importantNotice: "",
+    usefulTip: "",
+    news: "",
+  },
 };
 const INITIAL_TIMEOUT_POLICY = {
   code: "initial_admin_review",
@@ -1351,6 +1373,41 @@ exports.getAdminConfig = onCall({region: REGION}, async (request) => {
   };
 });
 
+exports.adminUpdatePublicConfig = onCall({region: REGION}, async (request) => {
+  const actor = await requireAdminActor(request);
+  const payload = request.data || {};
+  const configRef = db.collection(PUBLIC_CONFIG).doc(PUBLIC_CONFIG_HOME);
+  const auditRef = configRef.collection("events").doc();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  let savedConfig;
+  await db.runTransaction(async (tx) => {
+    const current = await tx.get(configRef);
+    const currentConfig = publicConfigFromSnapshot(current);
+    const nextConfig = mergePublicConfig(currentConfig, payload);
+    validatePublicConfig(nextConfig);
+    tx.set(configRef, {
+      ...nextConfig,
+      updatedAt: now,
+      updatedBy: actor.uid,
+      lastUpdatedBy: actor.uid,
+    }, {merge: false});
+    tx.set(auditRef, {
+      type: "admin_public_config_update",
+      actorUid: actor.uid,
+      actorRole: actor.role,
+      summary: "Admin actualizó configuración pública.",
+      createdAt: now,
+    });
+    savedConfig = nextConfig;
+  });
+
+  return {
+    config: savedConfig,
+    message: "Configuración pública guardada.",
+  };
+});
+
 async function readAdminDeliveryConfig() {
   const snap = await db.collection("admin_config").doc("real_use").get();
   return adminDeliveryConfigFromSnapshot(snap);
@@ -1364,6 +1421,99 @@ function adminDeliveryConfigFromSnapshot(snap) {
     baseDeliveryFee: validConfigAmountOrDefault(snap.get("baseDeliveryFee"), DEFAULT_ADMIN_DELIVERY_CONFIG.baseDeliveryFee),
     distanceSurcharge: validConfigAmountOrDefault(snap.get("distanceSurcharge"), DEFAULT_ADMIN_DELIVERY_CONFIG.distanceSurcharge),
   };
+}
+
+function publicConfigFromSnapshot(snap) {
+  if (!snap.exists) return structuredCloneSafe(DEFAULT_PUBLIC_CONFIG);
+  return mergePublicConfig(DEFAULT_PUBLIC_CONFIG, snap.data() || {});
+}
+
+function mergePublicConfig(currentConfig, payload) {
+  const next = structuredCloneSafe(currentConfig);
+  if (Object.prototype.hasOwnProperty.call(payload, "title")) next.title = cleanText(payload.title);
+  if (Object.prototype.hasOwnProperty.call(payload, "subtitle")) next.subtitle = cleanText(payload.subtitle);
+  if (Object.prototype.hasOwnProperty.call(payload, "quickAccess")) {
+    next.quickAccess = normalizeQuickAccess(payload.quickAccess);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "advertising")) {
+    next.advertising = normalizeAdvertising(payload.advertising);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "information")) {
+    next.information = normalizeInformation(payload.information);
+  }
+  return next;
+}
+
+function normalizeQuickAccess(value) {
+  if (!Array.isArray(value) || value.length !== 4) {
+    throw new HttpsError("invalid-argument", "Configurá los 4 accesos rápidos.");
+  }
+  return value.map((item) => ({
+    title: cleanText(item && item.title),
+    storeType: cleanText(item && item.storeType),
+    imageUrl: cleanText(item && item.imageUrl),
+  }));
+}
+
+function normalizeAdvertising(value) {
+  const imageUrls = Array.isArray(value && value.imageUrls) ? value.imageUrls.map(cleanText).filter(Boolean).slice(0, 3) : [];
+  return {
+    text: cleanText(value && value.text),
+    imageUrls,
+  };
+}
+
+function normalizeInformation(value) {
+  const daily = value && value.daily ? value.daily : {};
+  return {
+    mainText: cleanText(value && value.mainText),
+    mainImageUrl: cleanText(value && value.mainImageUrl),
+    buttonText: cleanText(value && value.buttonText),
+    daily: {
+      text: cleanText(daily.text),
+      description: cleanText(daily.description),
+      imageUrl: cleanText(daily.imageUrl),
+    },
+    importantNotice: cleanText(value && value.importantNotice),
+    usefulTip: cleanText(value && value.usefulTip),
+    news: cleanText(value && value.news),
+  };
+}
+
+function validatePublicConfig(config) {
+  if (!cleanText(config.title)) {
+    throw new HttpsError("invalid-argument", "El título principal es obligatorio.");
+  }
+  if (!cleanText(config.subtitle)) {
+    throw new HttpsError("invalid-argument", "El subtítulo es obligatorio.");
+  }
+  if (!Array.isArray(config.quickAccess) || config.quickAccess.length !== 4) {
+    throw new HttpsError("invalid-argument", "Configurá los 4 accesos rápidos.");
+  }
+  config.quickAccess.forEach((item, index) => {
+    if (!cleanText(item.title)) {
+      throw new HttpsError("invalid-argument", `El acceso rápido ${index + 1} necesita título.`);
+    }
+    if (!cleanText(item.storeType)) {
+      throw new HttpsError("invalid-argument", `El acceso rápido ${index + 1} necesita tipo de local.`);
+    }
+    if (!cleanText(item.imageUrl)) {
+      throw new HttpsError("invalid-argument", `El acceso rápido ${index + 1} necesita imagen.`);
+    }
+  });
+  if (!cleanText(config.information && config.information.mainText)) {
+    throw new HttpsError("invalid-argument", "El texto informativo principal es obligatorio.");
+  }
+  if (!cleanText(config.information && config.information.mainImageUrl)) {
+    throw new HttpsError("invalid-argument", "La imagen informativa principal es obligatoria.");
+  }
+  if (!cleanText(config.information && config.information.buttonText)) {
+    throw new HttpsError("invalid-argument", "El texto del botón informativo es obligatorio.");
+  }
+}
+
+function structuredCloneSafe(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function validConfigAmountOrDefault(value, fallback) {

@@ -50,11 +50,13 @@ import com.pedilo.app.core.model.TeamLoginRequest
 import com.pedilo.app.core.model.TeamLoginResult
 import com.pedilo.app.core.model.TeamRole
 import com.pedilo.app.core.model.PublicOrderTicket
+import com.pedilo.app.core.model.PublicConfiguration
 import com.pedilo.app.core.result.CoreError
 import com.pedilo.app.core.result.CoreResult
 import com.pedilo.app.core.runtime.publicLocalOrderUseCase
 import com.pedilo.app.core.runtime.publicPlusOrderUseCase
 import com.pedilo.app.core.runtime.publicTrackingUseCase
+import com.pedilo.app.core.runtime.publicConfigurationUseCase
 import com.pedilo.app.core.runtime.teamAccessPort
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -93,16 +95,26 @@ fun PublicApp() {
         val context = LocalContext.current
         var showSplash by remember { mutableStateOf(true) }
         var catalogState by remember { mutableStateOf(PublicCatalogState()) }
+        var publicConfig by remember { mutableStateOf(PublicConfiguration()) }
         val scope = rememberCoroutineScope()
         val createLocalOrder = remember { publicLocalOrderUseCase() }
         val createPlusOrder = remember { publicPlusOrderUseCase() }
         val getPublicTracking = remember { publicTrackingUseCase() }
+        val getPublicConfiguration = remember { publicConfigurationUseCase() }
         val teamAccess = remember { teamAccessPort() }
         val teamSessionStore = remember { TeamSessionStore(context) }
         var activeTeamSession by remember { mutableStateOf(teamSessionStore.readPersistedSession()) }
 
         LaunchedEffect(Unit) {
             catalogState = withContext(Dispatchers.IO) { loadPublicCatalogState() }
+        }
+
+        LaunchedEffect(Unit) {
+            getPublicConfiguration.observe().collect { result ->
+                if (result is CoreResult.Success) {
+                    publicConfig = result.value
+                }
+            }
         }
 
         if (showSplash) {
@@ -251,6 +263,7 @@ fun PublicApp() {
         when (route) {
             PublicRoute.Home -> PublicHomeScreen(
                 catalogState = catalogState,
+                publicConfig = publicConfig,
                 onHome = { goHome() },
                 onPlus = { goPlus() },
                 onShop = { goShop() },
@@ -399,6 +412,7 @@ fun PublicApp() {
                 query = (route as PublicRoute.ShopSearch).query,
                 current = (route as PublicRoute.ShopSearch).origin,
                 catalogState = catalogState,
+                publicTitle = publicConfig.title,
                 onHome = { goHome() },
                 onPlus = { goPlus() },
                 onShop = { goShop() },
@@ -421,6 +435,7 @@ fun PublicApp() {
                 current = PublicBottomDestination.Home,
                 titleOverride = (route as PublicRoute.HomeListing).title,
                 catalogState = catalogState,
+                publicTitle = publicConfig.title,
                 onHome = { goHome() },
                 onPlus = { goPlus() },
                 onShop = { goShop() },
@@ -429,6 +444,7 @@ fun PublicApp() {
                 },
             )
             PublicRoute.Conventions -> PublicConventionsScreen(
+                publicConfig = publicConfig,
                 onHome = { goHome() },
                 onPlus = { goPlus() },
                 onShop = { goShop() },
@@ -437,6 +453,7 @@ fun PublicApp() {
                 onTracking = { navigateTo(PublicRoute.ConventionsTrackingEntry) },
             )
             PublicRoute.ConventionsInfo -> PublicConventionsInfoScreen(
+                publicConfig = publicConfig,
                 onHome = { goHome() },
                 onPlus = { goPlus() },
                 onShop = { goShop() },

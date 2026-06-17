@@ -1,6 +1,8 @@
 package com.pedilo.app.ui.publicuser
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,7 +41,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,9 +54,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pedilo.app.core.model.PublicClaimDraft
+import com.pedilo.app.core.model.PublicConfiguration
+import com.pedilo.app.core.model.PublicDailyInfoConfig
 import com.pedilo.app.core.result.CoreError
 import com.pedilo.app.core.result.CoreResult
 import com.pedilo.app.core.runtime.publicClaimUseCase
+import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,6 +85,7 @@ private data class ConventionOption(
 
 @Composable
 fun PublicConventionsScreen(
+    publicConfig: PublicConfiguration = PublicConfiguration(),
     onHome: () -> Unit,
     onPlus: () -> Unit,
     onShop: () -> Unit,
@@ -90,11 +99,13 @@ fun PublicConventionsScreen(
         onPlus = onPlus,
         onShop = onShop,
     ) {
+        val info = publicConfig.information
+        val hasInfoCards = info.importantNotice.isNotBlank() || info.usefulTip.isNotBlank() || info.news.isNotBlank()
         val options = listOf(
-            ConventionOption("Información del día", "", "Leer", ConventionIconKind.Info, onInfo),
+            if (hasInfoCards) ConventionOption("Información", "", "Leer", ConventionIconKind.Info, onInfo) else null,
             ConventionOption("Reclamo", "", "Aviso", ConventionIconKind.Claim, onClaim),
             ConventionOption("Seguimiento del pedido", "", "Pedido", ConventionIconKind.Tracking, onTracking),
-        )
+        ).filterNotNull()
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -103,7 +114,9 @@ fun PublicConventionsScreen(
             contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 132.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { TodayHighlightCard() }
+            if (info.daily.isVisible) {
+                item { TodayHighlightCard(info.daily) }
+            }
             options.forEach { option ->
                 item { ConventionOptionCard(option) }
             }
@@ -113,6 +126,7 @@ fun PublicConventionsScreen(
 
 @Composable
 fun PublicConventionsInfoScreen(
+    publicConfig: PublicConfiguration = PublicConfiguration(),
     onHome: () -> Unit,
     onPlus: () -> Unit,
     onShop: () -> Unit,
@@ -131,27 +145,27 @@ fun PublicConventionsInfoScreen(
             contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 132.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
+            if (publicConfig.information.importantNotice.isNotBlank()) item {
                 InformationCard(
                     icon = ConventionIconKind.Alert,
                     title = "Aviso importante",
-                    body = "Cuando hay mucha actividad algunos locales pueden tardar unos minutos más de lo habitual.",
+                    body = publicConfig.information.importantNotice,
                     accent = PediloOrange,
                 )
             }
-            item {
+            if (publicConfig.information.usefulTip.isNotBlank()) item {
                 InformationCard(
                     icon = ConventionIconKind.Clock,
                     title = "Dato útil",
-                    body = "Revisá el tiempo estimado antes de confirmar cualquier compra o retiro.",
+                    body = publicConfig.information.usefulTip,
                     accent = PediloCyan,
                 )
             }
-            item {
+            if (publicConfig.information.news.isNotBlank()) item {
                 InformationCard(
                     icon = ConventionIconKind.Info,
                     title = "Novedad",
-                    body = "Usá el número que recibiste al confirmar tu pedido para consultar el estado.",
+                    body = publicConfig.information.news,
                     accent = PediloPink,
                 )
             }
@@ -383,7 +397,7 @@ private fun ConventionHeader(title: String, subtitle: String) {
 }
 
 @Composable
-private fun TodayHighlightCard() {
+private fun TodayHighlightCard(daily: PublicDailyInfoConfig) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -400,16 +414,44 @@ private fun TodayHighlightCard() {
                 .background(PediloOrange),
             contentAlignment = Alignment.Center,
         ) {
-            ConventionIcon(ConventionIconKind.Info, tint = Color.White, modifier = Modifier.size(30.dp))
+            PublicConventionRemoteImage(daily.imageUrl, modifier = Modifier.matchParentSize())
+            if (daily.imageUrl.isBlank()) {
+                ConventionIcon(ConventionIconKind.Info, tint = Color.White, modifier = Modifier.size(30.dp))
+            }
         }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text("Día activo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(3.dp))
-            Text("¡Envíos más rápidos!", color = Color.White, fontSize = 19.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
-            Spacer(Modifier.height(4.dp))
-            Text("Hoy priorizamos los locales con mejor disponibilidad para que tus pedidos lleguen antes.", color = Color.White, fontSize = 12.sp, lineHeight = 16.sp)
+            if (daily.text.isNotBlank()) {
+                Text(daily.text, color = Color.White, fontSize = 19.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            if (daily.description.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(daily.description, color = Color.White, fontSize = 12.sp, lineHeight = 16.sp)
+            }
         }
+    }
+}
+
+@Composable
+private fun PublicConventionRemoteImage(url: String, modifier: Modifier = Modifier) {
+    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(url) {
+        bitmap = null
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            bitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    URL(url).openStream().use { BitmapFactory.decodeStream(it) }
+                }.getOrNull()
+            }
+        }
+    }
+    bitmap?.let {
+        Image(
+            bitmap = it.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
     }
 }
 

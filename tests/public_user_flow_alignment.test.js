@@ -101,11 +101,11 @@ test("public entry remains in public navigation and never writes orders directly
 test("public home explains real ordering flow without fake catalog data", () => {
   const source = read(home);
 
-  assert.match(source, /PublicFlowCard/);
-  assert.match(source, /Pedí sin vueltas/);
-  assert.match(source, /"Local"/);
-  assert.match(source, /"Datos"/);
-  assert.match(source, /"Seguí"/);
+  assert.match(source, /PublicAdvertisingCard/);
+  assert.match(source, /publicConfig\.advertising\.isVisible/);
+  assert.match(source, /publicConfig\.quickAccess/);
+  assert.match(source, /HomeBanner\(publicConfig = publicConfig/);
+  assert.match(source, /PublicRemoteImage/);
   assert.match(source, /Cuando el entorno de prueba cargue catálogo autorizado/);
   assert.match(source, /PediloIconKind\.Check/);
   assert.doesNotMatch(source, /Pizzería Roma|Pizza muzzarella|pedido demo|datos demo/i);

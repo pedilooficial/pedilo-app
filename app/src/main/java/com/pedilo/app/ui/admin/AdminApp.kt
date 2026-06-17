@@ -1,6 +1,7 @@
 package com.pedilo.app.ui.admin
 
 import androidx.activity.compose.BackHandler
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -100,9 +101,17 @@ import com.pedilo.app.core.model.AdminProblemOrdersBucket
 import com.pedilo.app.core.model.AdminRoleUpdateRequest
 import com.pedilo.app.core.model.AdminTeamUser
 import com.pedilo.app.core.model.LiveOrderAction
+import com.pedilo.app.core.model.PublicConfiguration
+import com.pedilo.app.core.model.PublicConfigurationUpdateRequest
 import com.pedilo.app.core.result.CoreError
 import com.pedilo.app.core.result.CoreResult
 import com.pedilo.app.core.runtime.adminOrdersUseCase
+import com.pedilo.app.core.runtime.publicConfigurationUseCase
+import com.pedilo.app.ui.admin.configuration.AdminPublicAdvertisingScreen
+import com.pedilo.app.ui.admin.configuration.AdminPublicEditHomeScreen
+import com.pedilo.app.ui.admin.configuration.AdminPublicInformationScreen
+import com.pedilo.app.ui.admin.configuration.AdminPublicQuickAccessScreen
+import com.pedilo.app.ui.admin.configuration.AdminPublicTitlesScreen
 import com.pedilo.app.ui.admin.components.AdminBottomBar
 import com.pedilo.app.ui.admin.components.AdminEntryCard
 import com.pedilo.app.ui.admin.components.AdminHeader
@@ -156,6 +165,11 @@ private sealed interface AdminRoute {
     data object ConfigurationRainMode : AdminRoute
     data object ConfigurationBaseDeliveryFee : AdminRoute
     data object ConfigurationDistanceSurcharge : AdminRoute
+    data object ConfigurationPublicEdit : AdminRoute
+    data object PublicEditTitles : AdminRoute
+    data object PublicEditQuickAccess : AdminRoute
+    data object PublicEditAdvertising : AdminRoute
+    data object PublicEditInformation : AdminRoute
     data object RoleAccess : AdminRoute
     data class OperationBranch(val list: AdminOperationList) : AdminRoute
     data class OperationQueue(val list: AdminOperationList) : AdminRoute
@@ -416,6 +430,7 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
     var operationalHealth by remember { mutableStateOf<AdminOperationalHealthReport?>(null) }
     var teamUsers by remember { mutableStateOf<List<AdminTeamUser>>(emptyList()) }
     var adminConfig by remember { mutableStateOf(AdminConfigState()) }
+    var publicConfig by remember { mutableStateOf(PublicConfiguration()) }
     var accessMessage by remember { mutableStateOf("") }
     var accessError by remember { mutableStateOf("") }
     var configMessage by remember { mutableStateOf("") }
@@ -423,6 +438,7 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
     var operationMessage by remember { mutableStateOf("") }
     var operationError by remember { mutableStateOf("") }
     val adminOrders = remember { adminOrdersUseCase() }
+    val publicConfiguration = remember { publicConfigurationUseCase() }
     val scope = rememberCoroutineScope()
 
     fun loadOrderDetail(orderId: String, force: Boolean = false) {
@@ -504,6 +520,34 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
         }
     }
 
+    fun updatePublicConfig(request: PublicConfigurationUpdateRequest) {
+        scope.launch {
+            configMessage = ""
+            configError = ""
+            when (val result = publicConfiguration.savePublicConfiguration(request)) {
+                is CoreResult.Success -> {
+                    result.value.configuration?.let { publicConfig = it }
+                    configMessage = result.value.message.ifBlank { "Configuración pública guardada." }
+                }
+                is CoreResult.Failure -> configError = result.error.adminHumanError()
+            }
+        }
+    }
+
+    fun uploadPublicImage(uri: Uri, segment: String, onUploaded: (String) -> Unit) {
+        scope.launch {
+            configMessage = ""
+            configError = ""
+            when (val result = publicConfiguration.uploadImage(uri, segment)) {
+                is CoreResult.Success -> {
+                    onUploaded(result.value)
+                    configMessage = "Imagen cargada. Guardá la pantalla para publicar el cambio."
+                }
+                is CoreResult.Failure -> configError = result.error.adminHumanError()
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         when (val result = adminOrders.getHealth()) {
             is CoreResult.Success -> operationalHealth = result.value
@@ -525,6 +569,14 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
                         configError = ""
                     }
                     is CoreResult.Failure -> configError = "No pudimos cargar configuración. Revisá conexión o sesión."
+                }
+            }
+        }
+        launch {
+            publicConfiguration.observe().collect { result ->
+                when (result) {
+                    is CoreResult.Success -> publicConfig = result.value
+                    is CoreResult.Failure -> configError = "No pudimos cargar la configuración pública."
                 }
             }
         }
@@ -559,6 +611,11 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
             AdminRoute.ConfigurationBaseDeliveryFee,
             AdminRoute.ConfigurationDistanceSurcharge -> AdminRoute.ConfigurationShippingFee
             AdminRoute.ConfigurationShippingFee -> AdminRoute.Configuration
+            AdminRoute.PublicEditTitles,
+            AdminRoute.PublicEditQuickAccess,
+            AdminRoute.PublicEditAdvertising,
+            AdminRoute.PublicEditInformation -> AdminRoute.ConfigurationPublicEdit
+            AdminRoute.ConfigurationPublicEdit -> AdminRoute.Configuration
             is AdminRoute.OperationGuidedAction -> current.detailRoute
             is AdminRoute.OperationOrderSection -> current.detailRoute
             is AdminRoute.OperationOrderDetail -> current.returnRoute
@@ -594,6 +651,7 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
                 message = configMessage,
                 error = configError,
                 onOpenShippingFee = { route = AdminRoute.ConfigurationShippingFee },
+                onOpenPublicEdit = { route = AdminRoute.ConfigurationPublicEdit },
             )
             AdminRoute.ConfigurationShippingFee -> AdminShippingFeeScreen(
                 onRainMode = { route = AdminRoute.ConfigurationRainMode },
@@ -622,6 +680,39 @@ fun AdminApp(onSignOutConfirmed: () -> Unit) {
                 onAmount = { value -> updateAdminConfig(AdminConfigUpdateRequest(field = "distanceSurcharge", amount = value)) },
                 message = configMessage,
                 error = configError,
+            )
+            AdminRoute.ConfigurationPublicEdit -> AdminPublicEditHomeScreen(
+                onTitles = { route = AdminRoute.PublicEditTitles },
+                onQuickAccess = { route = AdminRoute.PublicEditQuickAccess },
+                onAdvertising = { route = AdminRoute.PublicEditAdvertising },
+                onInformation = { route = AdminRoute.PublicEditInformation },
+            )
+            AdminRoute.PublicEditTitles -> AdminPublicTitlesScreen(
+                config = publicConfig,
+                message = configMessage,
+                error = configError,
+                onSave = { updatePublicConfig(it) },
+            )
+            AdminRoute.PublicEditQuickAccess -> AdminPublicQuickAccessScreen(
+                config = publicConfig,
+                message = configMessage,
+                error = configError,
+                onUploadImage = { uri, segment, onUploaded -> uploadPublicImage(uri, segment, onUploaded) },
+                onSave = { updatePublicConfig(it) },
+            )
+            AdminRoute.PublicEditAdvertising -> AdminPublicAdvertisingScreen(
+                config = publicConfig,
+                message = configMessage,
+                error = configError,
+                onUploadImage = { uri, segment, onUploaded -> uploadPublicImage(uri, segment, onUploaded) },
+                onSave = { updatePublicConfig(it) },
+            )
+            AdminRoute.PublicEditInformation -> AdminPublicInformationScreen(
+                config = publicConfig,
+                message = configMessage,
+                error = configError,
+                onUploadImage = { uri, segment, onUploaded -> uploadPublicImage(uri, segment, onUploaded) },
+                onSave = { updatePublicConfig(it) },
             )
             AdminRoute.RoleAccess -> AdminRealRoleAccessScreen(
                 users = teamUsers,
@@ -1810,6 +1901,7 @@ private fun AdminRealConfigurationScreen(
     message: String,
     error: String,
     onOpenShippingFee: () -> Unit,
+    onOpenPublicEdit: () -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -1832,6 +1924,13 @@ private fun AdminRealConfigurationScreen(
                 title = "Tarifa\nenvío",
                 toneColor = PediloOrange,
                 onClick = onOpenShippingFee,
+            )
+        }
+        item {
+            AdminConfigurationSquareCard(
+                title = "Editar\nPúblico",
+                toneColor = PediloCyan,
+                onClick = onOpenPublicEdit,
             )
         }
     }
@@ -3738,6 +3837,11 @@ private fun AdminRoute.root(): AdminRoot = when (this) {
     AdminRoute.ConfigurationRainMode -> AdminRoot.Configuration
     AdminRoute.ConfigurationBaseDeliveryFee -> AdminRoot.Configuration
     AdminRoute.ConfigurationDistanceSurcharge -> AdminRoot.Configuration
+    AdminRoute.ConfigurationPublicEdit -> AdminRoot.Configuration
+    AdminRoute.PublicEditTitles -> AdminRoot.Configuration
+    AdminRoute.PublicEditQuickAccess -> AdminRoot.Configuration
+    AdminRoute.PublicEditAdvertising -> AdminRoot.Configuration
+    AdminRoute.PublicEditInformation -> AdminRoot.Configuration
     AdminRoute.RoleAccess -> AdminRoot.RoleAccess
     is AdminRoute.OperationBranch -> AdminRoot.Operation
     is AdminRoute.OperationOrderDetail -> AdminRoot.Operation
